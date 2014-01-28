@@ -29,11 +29,12 @@
 #define NPY_NO_DEPRECATED_API NPY_API_VERSION
 
 #include <stdlib.h>
+#include <stdio.h>
 #include "npy_sort.h"
 #include "npysort_common.h"
 
 #define NOT_USED NPY_UNUSED(unused)
-#define PYA_QS_STACK 100
+#define PYA_QS_STACK 1000
 #define SMALL_QUICKSORT 15
 #define SMALL_MERGESORT 20
 #define SMALL_STRING 16
@@ -63,66 +64,309 @@
 int
 quicksort_@suff@(@type@ *start, npy_intp num, void *NOT_USED)
 {
-    @type@ vp;
-    @type@ *pl = start;
-    @type@ *pr = start + num - 1;
-    @type@ *stack[PYA_QS_STACK];
-    @type@ **sptr = stack;
-    @type@ *pm, *pi, *pj, *pk;
-
+    @type@ *stack[PYA_QS_STACK],
+           **sptr = stack,
+           *left = start,
+           *right = start + num - 1,
+           *less, *great, *i, *j, *k,
+           ival, jval, kval, pivot1, pivot2;
+               
     for (;;) {
-        while ((pr - pl) > SMALL_QUICKSORT) {
-            /* quicksort partition */
-            pm = pl + ((pr - pl) >> 1);
-            if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
-            if (@TYPE@_LT(*pr, *pm)) @TYPE@_SWAP(*pr, *pm);
-            if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
-            vp = *pm;
-            pi = pl;
-            pj = pr - 1;
-            @TYPE@_SWAP(*pm, *pj);
-            for (;;) {
-                do ++pi; while (@TYPE@_LT(*pi, vp));
-                do --pj; while (@TYPE@_LT(vp, *pj));
-                if (pi >= pj) {
-                    break;
+        while (num > SMALL_QUICKSORT) {
+            /* Perhaps third = (num >> 2) + (num >> 4) +1 is a better option */
+            @type@ *e2 = left + (num >> 1),
+                   *e1 = e2 - (num >> 2),
+                   *e3 = e2 + (num >> 2);
+            if (@TYPE@_LT(*e2, *e1)) @TYPE@_SWAP(*e1, *e2);
+            if (@TYPE@_LT(*e3, *e2)) @TYPE@_SWAP(*e2, *e3);
+            if (@TYPE@_LT(*e2, *e1)) @TYPE@_SWAP(*e1, *e2);
+            pivot1 = *e1;
+            pivot2 = *e3;
+            less = left;
+            great = right;
+ 
+            if (@TYPE@_LT(pivot1, pivot2)) {
+                /* copy the end items into the pivot positions */
+                *e1 = *left;
+                *e3 = *right;
+                printf("* both pivots are equal, %d, %d, (%d)...\n", pivot1, pivot2, e3-e1);
+                /*
+                 * Skip elements that are less (greater) than pivots,
+                 * we know that pivot1 <= *e1 <= pivot2, so these two
+                 * loops are certain to not run out of bounds.
+                 */
+                do less++; while(@TYPE@_LT(*less, pivot1));
+                do great--; while(@TYPE@_LT(pivot2, *great));
+                /*
+                 * Partitioning:
+                 *
+                 *   +-----------------------------------------------------+
+                 *   | < p1 | >= p1 && <= p2 |  ?  | >= p1 && <= p2 | > p2 |
+                 *   +-----------------------------------------------------+
+                 *  ^        ^                ^   ^                ^        ^
+                 *  |        |                |   |                |        |
+                 * left     less              j   k              great    right
+                 *
+                 * Invariants:
+                 *
+                 *              all in (left, less)   < pivot1
+                 *    pivot1 <= all in [less, k)     <= pivot2
+                 *              all in (great, right) > pivot2
+                 *
+                 * Pointer k is the first index of ?-part.
+                 */
+                j = less;
+                k = great;
+                for (;;) {
+                    jval = *j;
+                    while (@TYPE@_LT(jval, pivot2) && (j <= k)) {
+                        if (@TYPE@_LT(jval, pivot1)) {
+                            *j = *less;
+                            *less++ = jval;
+                        }
+                        jval = *(++j);
+                    }
+                    kval = *k;
+                    while (@TYPE@_LT(pivot1, kval) && (k >= j)) {
+                        if (@TYPE@_LT(pivot2, kval)) {
+                            *k = *great;
+                            *great-- = kval;
+                        }
+                        kval = *(--k);
+                    }
+                    if (j > k) {
+                        break;
+                    }
+                    *j++ = *less;
+                    *k-- = *great;
+                    *less++ = kval;
+                    *great-- = jval;
                 }
-                @TYPE@_SWAP(*pi,*pj);
-            }
-            pk = pr - 1;
-            @TYPE@_SWAP(*pi, *pk);
-            /* push largest partition on stack */
-            if (pi - pl < pr - pi) {
-                *sptr++ = pi + 1;
-                *sptr++ = pr;
-                pr = pi - 1;
-            }
-            else {
-                *sptr++ = pl;
-                *sptr++ = pi - 1;
-                pl = pi + 1;
-            }
-        }
+                 /* make room for and copy pivots into position */
+                *left = *(less - 1); // *left = *(--less);
+                *(less - 1) = pivot1; // *less = pivot1
+                *right = *(great + 1); // *right = *(++great);
+                *(great + 1) = pivot2; // *great = pivot2;
+                
+                /* Push left and right partitions on stack */
+                *(sptr++) = great + 2;
+                *(sptr++) = right;
+                *(sptr++) = left;
+                *(sptr++) = less - 2;
+                left = less;
+                // while(!@TYPE@_LT(pivot1, *left)) left++;
+                right = great;
+                // while(!@TYPE@_LT(*right, pivot2)) right--;
+                // printf("** right-left now is: %d\n", right-left);
+            } /* end of if (pivot1 != pivot2) statement */
+            // if (@TYPE@_LT(pivot1, pivot2)) {
+                // /* copy the end items into the pivot positions */
+                // *e1 = *left;
+                // *e3 = *right;
+                // /*
+                 // * Skip elements that are less (greater) than pivots.
+                 // */
+                // do less++; while(@TYPE@_LT(*less, pivot1));
+                // do great--; while(@TYPE@_LT(pivot2, *great));
+                // /*
+                 // * Partitioning:
+                 // *
+                 // *    left part         center part             right part
+                 // *   +----------------------------------------------------+
+                 // *   | < pivot1 | pivot1 <= && <= pivot2 |  ?  | > pivot2 |
+                 // *   +----------------------------------------------------+
+                 // *  ^            ^                        ^   ^            ^
+                 // *  |            |                        |   |            |
+                 // * left         less                      k great        right
+                 // *
+                 // * Invariants:
+                 // *
+                 // *              all in (left, less)   < pivot1
+                 // *    pivot1 <= all in [less, k)     <= pivot2
+                 // *              all in (great, right) > pivot2
+                 // *
+                 // * Pointer k is the first index of ?-part.
+                 // */
+                // // printf("* pivots are different: %d, %d, (%d)...\n", pivot1, pivot2, e3-e1);
+                // for (k = less; k <= great; k++) {
+                    // kval = *k;
+                    // if (@TYPE@_LT(kval, pivot1)) {
+                        // *k = *less;
+                        // *less++ = kval;
+                    // } else if (@TYPE@_LT(pivot2, kval)) {
+                        // while (@TYPE@_LT(pivot2, *great)) great--;
+                        // if (great > k) {
+                            // if (@TYPE@_LT(*great, pivot1)) {
+                                // *k = *less;
+                                // *less++ = *great;
+                            // }
+                            // else {
+                                // *k = *great;
+                            // }
+                            // *great-- = kval;
+                        // }
+                    // }
+                // }
+                // /* make room for and copy pivots into position */
+                // *left = *(less - 1); // *left = *(--less);
+                // *(less - 1) = pivot1; // *less = pivot1
+                // *right = *(great + 1); // *right = *(++great);
+                // *(great + 1) = pivot2; // *great = pivot2;
+                
+                // /* Push left and right partitions on stack */
+                // *(sptr++) = great + 2;
+                // *(sptr++) = right;
+                // *(sptr++) = left;
+                // *(sptr++) = less - 2;
+                // left = less;
+                // // while(!@TYPE@_LT(pivot1, *left)) left++;
+                // right = great;
+                // // while(!@TYPE@_LT(*right, pivot2)) right--;
+                // // printf("** right-left now is: %d\n", right-left);
+            // } /* end of if (pivot1 != pivot2) statement */
+            else { /* Both pivots are equal */
+                /*
+                 * Partition degenerates to the traditional 3-way
+                 * (or "Dutch National Flag") schema:
+                 *
+                 *  left part center part       right part
+                 * +--------------------------------------+
+                 * | < pivot |  ==pivot  |  ?  | > pivot  |
+                 * +--------------------------------------+
+                 *  ^         ^           ^   ^          ^
+                 *  |         |           |   |          |
+                 * left      less         k great      right
+                 *
+                 * Invariants:
+                 *
+                 *              all in (left, less)   < pivot
+                 *    pivot1 <= all in [less, k)     == pivot
+                 *              all in (great, right) > pivot
+                 *
+                 * Pointer k is the first index of ?-part.
+                 */
+                printf("* both pivots are equal, %d, %d, (%d)...\n", pivot1, pivot2, e3-e1);
+                for (k = left; k <= great; k++) {
+                    kval = *k;
+                    if (@TYPE@_LT(kval, pivot1)) { /* move *k to left */
+                        *k = *less;
+                        *less++ = kval;
+                    }
+                    else if (@TYPE@_LT(pivot1, kval)) { /* move *k to right */
+                        while (@TYPE@_LT(pivot1, *great)) great--; /* *great > pivot1 */
+                        if (@TYPE@_LT(*great, pivot1)) { /* *great < pivot */
+                            *k = *less;
+                            *less++ = *great;
+                        } else { /* *great == pivot */
+                            *k = *great;
+                        }
+                        *great-- = kval;
+                    }
+                }
+                /* push largest partition on stack */
+                if (less - left < right - great) {
+                    *(sptr++) = great + 1;
+                    *(sptr++) = right;
+                    right = less - 1;
+                } else {
+                    *(sptr++) = left;
+                    *(sptr++) = less - 1;
+                    left = great + 1;
+                }
+                // printf("** right-left now is: %d\n", right-left);
+            } /* end of if (pivot1 != pivot2) else statement */
+            num = right - left + 1;
+        } /* end of while ((right - left) > SMALL_QUICKSORT - 1) statement */
+        // printf("insertion sort...\n");
 
         /* insertion sort */
-        for (pi = pl + 1; pi <= pr; ++pi) {
-            vp = *pi;
-            pj = pi;
-            pk = pi - 1;
-            while (pj > pl && @TYPE@_LT(vp, *pk)) {
-                *pj-- = *pk--;
+        for(i = left + 1; i <= right; i++) {
+            ival = *i;
+            j = i;
+            k = i - 1;
+            kval = *k;
+            while(j > left && @TYPE@_LT(ival, kval)) {
+                // *j-- = *k--;
+                *j-- = kval;
+                kval = *(--k);
             }
-            *pj = vp;
+            *j = ival;
         }
+        /* Grab another partition to sort */
         if (sptr == stack) {
             break;
         }
-        pr = *(--sptr);
-        pl = *(--sptr);
-    }
-
+        right = *(--sptr);
+        left = *(--sptr);
+        num = right - left + 1;
+    } /* end of while (sptr > stack) statement */
+    // printf("sorts: %d, repeats: %d, dijkstras: %d\n", sorts, repeats, dijkstras);
     return 0;
 }
+
+// int
+// quicksort_@suff@(@type@ *start, npy_intp num, void *NOT_USED)
+// {
+    // @type@ vp;
+    // @type@ *pl = start;
+    // @type@ *pr = start + num - 1;
+    // @type@ *stack[PYA_QS_STACK];
+    // @type@ **sptr = stack;
+    // @type@ *pm, *pi, *pj, *pk;
+
+    // for (;;) {
+        // while ((pr - pl) > SMALL_QUICKSORT) {
+            // /* quicksort partition */
+            // pm = pl + ((pr - pl) >> 1);
+            // if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
+            // if (@TYPE@_LT(*pr, *pm)) @TYPE@_SWAP(*pr, *pm);
+            // if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
+            // vp = *pm;
+            // pi = pl;
+            // pj = pr - 1;
+            // @TYPE@_SWAP(*pm, *pj);
+            // for (;;) {
+                // do ++pi; while (@TYPE@_LT(*pi, vp));
+                // do --pj; while (@TYPE@_LT(vp, *pj));
+                // if (pi >= pj) {
+                    // break;
+                // }
+                // @TYPE@_SWAP(*pi,*pj);
+            // }
+            // pk = pr - 1;
+            // @TYPE@_SWAP(*pi, *pk);
+            // /* push largest partition on stack */
+            // if (pi - pl < pr - pi) {
+                // *sptr++ = pi + 1;
+                // *sptr++ = pr;
+                // pr = pi - 1;
+            // }
+            // else {
+                // *sptr++ = pl;
+                // *sptr++ = pi - 1;
+                // pl = pi + 1;
+            // }
+        // }
+
+        // /* insertion sort */
+        // for (pi = pl + 1; pi <= pr; ++pi) {
+            // vp = *pi;
+            // pj = pi;
+            // pk = pi - 1;
+            // while (pj > pl && @TYPE@_LT(vp, *pk)) {
+                // *pj-- = *pk--;
+            // }
+            // *pj = vp;
+        // }
+        // if (sptr == stack) {
+            // break;
+        // }
+        // pr = *(--sptr);
+        // pl = *(--sptr);
+    // }
+
+    // return 0;
+// }
 
 
 int
