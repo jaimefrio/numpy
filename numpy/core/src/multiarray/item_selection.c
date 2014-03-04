@@ -1878,6 +1878,231 @@ PyArray_LexSort(PyObject *sort_keys, int axis)
 }
 
 
+NPY_NO_EXPORT PyObject*
+PyArray_SearchSorted(PyArrayObject *haystack, PyObject *needle,
+                     NPY_SEARCHSIDE side, PyObject *sorter, int axis)
+{
+    /* Array versions of the input arguments */
+    PyArrayObject *arr_hstack = NULL;
+    PyArrayObject *arr_needle = NULL;
+    PyArrayObject *arr_sorter = NULL;
+    PyArrayObject *arr_return = NULL;
+    /* Metadata of the inputs (and output) */
+    int ndim_hstack, ndim_needle, ndim_sorter, ndim_return;
+    npy_intp *shape_needle;
+    npy_intp *shape_sorter;
+    npy_intp *shape_hstack;
+    npy_intp shape_return[NPY_MAXDIMS];
+
+    PyArray_BinSearchFunc *binsearch = NULL;
+    PyArray_ArgBinSearchFunc *argbinsearch = NULL;
+
+    int ndim_outer=0, ndim_inner=0;
+
+
+    PyArray_Descr *dtype = NULL;
+    PyArray_Descr *type_hstack = NULL;
+    PyArray_Descr *type_needle = NULL;
+
+    int op_axes_outer_arrays[4][NPY_MAXDIMS];
+    int op_axes_inner_arrays[2][NPY_MAXDIMS];
+
+
+    npy_intp h, n, r;
+
+    /* Find common dtype, this is always in NBO */
+    dtype = PyArray_DescrFromObject(needle, PyArray_DESCR(hstack));
+    if (!dtype) {
+        return NULL;
+    }
+
+    /* Look for binary search function */
+    if (sorter) {
+        argbinsearch = get_argbinsearch_func(dtype, side);
+    }
+    else {
+        binsearch = get_binsearch_func(dtype, side);
+    }
+    if (binsearch == NULL && argbinsearch == NULL) {
+        PyErr_SetString(PyExc_TypeError, "compare not supported for type");
+        goto fail;
+    }
+
+    /* Check haystack*/
+    ndim_hstack = PyArray_NDIM(haystack);
+    shape_hstack = PyArray_DIMS(haystack);
+    type_hstack = PyArray_DESCR(haystack);
+
+    /* Check axis */
+    if (axis < 0) {
+        axis += ndim_return;
+    }
+    if (axis < 0 || axis >= ndim_return) {
+        PyErr_SetString(PyExc_ValueError, "'axis' entry is out of bounds");
+        goto fail;
+    }
+
+    /* Convert needle to an array */
+    if (!PyArray_Check(needle)) {
+        Py_INCREF(dtype);
+        arr_needle = (PyArrayObject *)PyArrayFromAny(needle, dtype,
+                                                     0, 0, 0, NULL);
+    } else {
+        arr_needle = (PyArrayObject *)needle;
+        Py_INCREF(arr_needle);
+    }
+    if (!arr_needle) {
+        goto fail;
+    }
+    ndim_needle = PyArray_NDIM(arr_needle);
+    shape_needle = PyArray_DIMS(arr_needle);
+    type_needle = PyArray_DESCR(arr_needle);
+
+    /* Convert sorter to an array */
+    if (sorter) {
+        if (!PyArray_Check(sorter)) {
+            arr_needle = (PyArrayObject *)PyArrayFROMANY(needle, NPY_INTP,
+                                                         0, 0, 0);
+        } else {
+            arr_sorter = (PyArrayObject *)sorter;
+            Py_INCREF(arr_sorter);
+        }
+        if (!arr_sorter) {
+            goto fail;
+        }
+        ndim_sorter = PyArray_NDIM(arr_sorter);
+        shape_sorter = PyArray_DIMS(arr_sorter);
+        type_sorter = PyArray_DESCR(arr_sorter);
+        if (!PyArray_ISINTEGER(arr_sorter)) {
+            PyErr_SetString(PyExc_TypeError,
+                            "'sorter' must be an array of integers");
+        }
+    }
+    else {
+        ndim sorter = 0;
+    }
+
+    /* Broadcast arrays and figure the output shape */
+    ndim_return = ndim_hstack > ndim_needle ? ndim_hstack : ndim_needle;
+    for (h = ndim_hstack - ndim_return,
+         n = ndim_needle - ndim_return,
+         s = ndim_sorter - ndim_return,
+         r = 0, r < ndim_return; h++, n++, s++, r++) {
+        npy_intp dim_h = h < 0 ? 1 : shape_stack[h];
+        npy_intp dim_n = n < 0 ? 1 : shape_stack[n];
+        npy_intp dim_s = s < 0 ? 1 : shape_stack[s];
+
+        if (sorter && ((h == axis && dim_h != dim_s) ||
+                       (h != axis && dim_s != 1 && dim_h != dim_s))) {
+            /*
+             * It does not make sense for broadcasting of haystach and
+             * sorter to increase the size of haystack, as it would imply
+             * more than one ordering for the same values.
+             */
+            PyErr_SetString(PyExc_ValueError,
+                    "'haystack' and 'sorter' could not be broadcast together");
+            goto fail;
+        }
+
+        if (h == axis || dim_h == 1) {
+            shape_return[r] = dim_n;
+            op_axes_inner_arrays[0][ndim_inner] = n < 0 ? -1 : n;
+            op_axes_inner_arrays[1][ndim_inner++] = r;
+        }
+        else if (dim_h == dim_n || dim_n == 1) {
+            shape_return[r] = dim_h;
+            op_axes_outer_arrays[0][ndim_outer] = h < 0 ? -1: h;
+            op_axes_outer_arrays[1][ndim_outer] = n < 0 ? -1: n;
+            op_axes_outer_arrays[2][ndim_outer] = s < 0 ? -1: s;
+            op_axes_outer_arrays[3][ndim_outer++] = r;
+        }
+        else {
+            /* broadcasting error */
+            PyErr_SetString(PyExc_ValueError,
+                    "'haystack' and 'needle' could not be broadcast together");
+            goto fail;
+         }
+    }
+
+    arr_return = (PyArrayObject *)PyArray_New(Py_TYPE(arr_needle),
+                                                      ndim_return,
+                                                      shape_return,
+                                                      NPY_INTP, NULL, NULL,
+                                                      0, 0,
+                                                      (PyObject *)arr_needle);
+
+
+    if (ndim_outer == 0) {
+        /* Do not use any iterator, arrays must have right types */
+        int flags = ndim_inner == 1 ? NPY_ARRAY_ALIGNED : NPY_ARRAY_CARRAY_RO;
+        PyArrayObject *arr_temp = NULL;
+        npy_intp stride_hstack, stride_needle, stride_sorter, stride_return;
+
+        Py_INCREF(dtype);
+        arr_temp = (PyArrayObject *)PyArray_FromAny(arr_needle, dtype,
+                                                    0, 0, flags, NULL);
+        if (arr_temp == NULL) {
+            goto fail;
+        }
+        Py_DECREF(arr_needle);
+        arr_needle = arr_temp;
+
+        if (PyArray_SIZE(haystack) <= PyArray_SIZE(arr_needle)) {
+            flags = NPY_ARRAY_CARRAY_RO;
+        }
+        else {
+            flags = NPY_ARRAY_ALIGNED;
+        }
+        arr_hstack = (PyArrayObject *)PyArray_FromAny(arr_hstack, dtype,
+                                                      0, 0, flags, NULL);
+        if (arr_hstack == NULL) {
+            goto fail;
+        }
+
+        if (sorter) {
+            flags |= NPY_ARRAY_FORCECAST;
+            arr_temp = (PyArrayObject *)PyArray_FROMANY(arr_sorter, NPY_INTP,
+                                                        0, 0, flags);
+            if (arr_temp == NULL) {
+                goto fail;
+            }
+            Py_DECREF(arr_sorteR);
+            arr_sorter = arr_temp;
+            stride_sorter = PyArray
+        }
+
+        if (ndim_inner == 1) {
+            stride_needle = ndim_needle ? PyArray_STRIDE(arr_needle, 0) : 0;
+            stride_return = PyArray_DESCR(arr_return)->item_size;
+
+        }
+
+        if (sorter == NULL) {
+            /* regular binsearch */
+
+
+
+        }
+
+
+    }
+
+
+    Py_DECREF(dtype);
+    Py_XDECREF(arr_hstack);
+    Py_XDECREF(arr_needle);
+    Py_XDECREF(arr_sorter);
+    return arr_return;
+
+    fail;
+        Py_DECREF(dtype);
+        Py_XDECREF(arr_hstack);
+        Py_XDECREF(arr_needle);
+        Py_XDECREF(arr_sorter);
+        Py_XDECREF(arr_return);
+        return NULL;
+}
+
 /*NUMPY_API
  *
  * Search the sorted array op1 for the location of the items in op2. The
