@@ -8,13 +8,13 @@
 typedef void (PyArray_BinSearchFunc)(const char*, const char*, char*,
                                      npy_intp, npy_intp,
                                      npy_intp, npy_intp, npy_intp,
-                                     PyArrayObject*);
+                                     npy_bool, PyArrayObject*);
 
 typedef int (PyArray_ArgBinSearchFunc)(const char*, const char*,
                                        const char*, char*,
                                        npy_intp, npy_intp, npy_intp,
                                        npy_intp, npy_intp, npy_intp,
-                                       PyArrayObject*);
+                                       npy_bool, PyArrayObject*);
 
 struct binsearch_map {
     enum NPY_TYPES typenum;
@@ -42,28 +42,29 @@ NPY_VISIBILITY_HIDDEN void
 binsearch_@side@_@suff@(const char *arr, const char *key, char *ret,
                         npy_intp arr_len, npy_intp key_len,
                         npy_intp arr_str, npy_intp key_str, npy_intp ret_str,
-                        PyArrayObject *unused);
+                        npy_bool sorted_key, PyArrayObject *unused);
 NPY_VISIBILITY_HIDDEN int
 argbinsearch_@side@_@suff@(const char *arr, const char *key,
                            const char *sort, char *ret,
                            npy_intp arr_len, npy_intp key_len,
                            npy_intp arr_str, npy_intp key_str,
                            npy_intp sort_str, npy_intp ret_str,
-                           PyArrayObject *unused);
+                           npy_bool sorted_key, PyArrayObject *unused);
 /**end repeat1**/
 
 NPY_VISIBILITY_HIDDEN void
 npy_binsearch_@side@(const char *arr, const char *key, char *ret,
                      npy_intp arr_len, npy_intp key_len,
                      npy_intp arr_str, npy_intp key_str,
-                     npy_intp ret_str, PyArrayObject *cmp);
+                     npy_intp ret_str, npy_bool sorted_key,
+                     PyArrayObject *cmp);
 NPY_VISIBILITY_HIDDEN int
 npy_argbinsearch_@side@(const char *arr, const char *key,
                         const char *sort, char *ret,
                         npy_intp arr_len, npy_intp key_len,
                         npy_intp arr_str, npy_intp key_str,
                         npy_intp sort_str, npy_intp ret_str,
-                        PyArrayObject *cmp);
+                        npy_bool sorted_key, PyArrayObject *cmp);
 /**end repeat**/
 
 /**begin repeat

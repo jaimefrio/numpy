@@ -1887,50 +1887,61 @@ PyArray_LexSort(PyObject *sort_keys, int axis)
  *
  * Parameters
  * ----------
- * op1 : PyArrayObject *
+ * haystack : PyArrayObject *
  *     Array to be searched, must be 1-D.
- * op2 : PyObject *
+ * needle : PyObject *
  *     Array of items whose insertion indexes in op1 are wanted
  * side : {NPY_SEARCHLEFT, NPY_SEARCHRIGHT}
  *     If NPY_SEARCHLEFT, return first valid insertion indexes
  *     If NPY_SEARCHRIGHT, return last valid insertion indexes
- * perm : PyObject *
+ * sorter : PyObject *
  *     Permutation array that sorts op1 (optional)
+ * sorted_needle : npy_bool
+ *     If True, then the needle is sorted along the last axis.
  *
  * Returns
  * -------
- * ret : PyObject *
- *   New reference to npy_intp array containing indexes where items in op2
- *   could be validly inserted into op1. NULL on error.
+ * arr_return : PyObject *
+ *   New reference to npy_intp array containing indexes where items in needle
+ *   could be validly inserted into haystack. NULL on error.
  *
  * Notes
  * -----
  * Binary search is used to find the indexes.
  */
 NPY_NO_EXPORT PyObject *
-PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
-                     NPY_SEARCHSIDE side, PyObject *perm)
+PyArray_SearchSorted(PyArrayObject *haystack, PyObject *needle,
+                     NPY_SEARCHSIDE side, PyObject *sorter,
+                     npy_bool sorted_needle)
 {
-    PyArrayObject *ap1 = NULL;
-    PyArrayObject *ap2 = NULL;
-    PyArrayObject *ap3 = NULL;
-    PyArrayObject *sorter = NULL;
-    PyArrayObject *ret = NULL;
+    PyArrayObject *arr_haystack = NULL;
+    PyArrayObject *arr_needle = NULL;
+    PyArrayObject *arr_sorter = NULL;
+    PyArrayObject *arr_return = NULL;
     PyArray_Descr *dtype;
-    int ap1_flags = NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ALIGNED;
+    int flags = NPY_ARRAY_ALIGNED;
     PyArray_BinSearchFunc *binsearch = NULL;
     PyArray_ArgBinSearchFunc *argbinsearch = NULL;
+    npy_intp len_outer, len_inner, stride_outer_needle, stride_outer_return;
+    npy_intp j;
+    const char *data_needle;
+    char *data_return;
+
     NPY_BEGIN_THREADS_DEF;
 
-    /* Find common type */
-    dtype = PyArray_DescrFromObject((PyObject *)op2, PyArray_DESCR(op1));
+    /* Find common type and make sure it is not swapped */
+    dtype = PyArray_DescrFromObject((PyObject *)needle,
+                                    PyArray_DESCR(haystack));
     if (dtype == NULL) {
         return NULL;
     }
-    /* refs to dtype we own = 1 */
+    if (PyDataType_ISBYTESWAPPED(dtype)) {
+        PyArray_DESCR_REPLACE(dtype);
+        dtype->byteorder = NPY_NATIVE;
+    }
 
     /* Look for binary search function */
-    if (perm) {
+    if (sorter) {
         argbinsearch = get_argbinsearch_func(dtype, side);
     }
     else {
@@ -1938,123 +1949,155 @@ PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
     }
     if (binsearch == NULL && argbinsearch == NULL) {
         PyErr_SetString(PyExc_TypeError, "compare not supported for type");
-        /* refs to dtype we own = 1 */
         Py_DECREF(dtype);
-        /* refs to dtype we own = 0 */
         return NULL;
     }
 
-    /* need ap2 as contiguous array and of right type */
-    /* refs to dtype we own = 1 */
+    /* need needle as contiguous array of right type */
     Py_INCREF(dtype);
-    /* refs to dtype we own = 2 */
-    ap2 = (PyArrayObject *)PyArray_CheckFromAny(op2, dtype,
-                                0, 0,
-                                NPY_ARRAY_CARRAY_RO | NPY_ARRAY_NOTSWAPPED,
-                                NULL);
-    /* refs to dtype we own = 1, array creation steals one even on failure */
-    if (ap2 == NULL) {
+    arr_needle = (PyArrayObject *)PyArray_FromAny(needle, dtype, 0, 0,
+                                                  NPY_ARRAY_CARRAY_RO, NULL);
+    if (arr_needle == NULL) {
         Py_DECREF(dtype);
-        /* refs to dtype we own = 0 */
         return NULL;
     }
 
     /*
-     * If the needle (ap2) is larger than the haystack (op1) we copy the
+     * If the needle is larger than the haystack we copy the
      * haystack to a contiguous array for improved cache utilization.
      */
-    if (PyArray_SIZE(ap2) > PyArray_SIZE(op1)) {
-        ap1_flags |= NPY_ARRAY_CARRAY_RO;
+    if (PyArray_SIZE(arr_needle) > PyArray_SIZE(haystack)) {
+        flags |= NPY_ARRAY_CARRAY_RO;
     }
-    ap1 = (PyArrayObject *)PyArray_CheckFromAny((PyObject *)op1, dtype,
-                                1, 1, ap1_flags, NULL);
-    /* refs to dtype we own = 0, array creation steals one even on failure */
-    if (ap1 == NULL) {
+    arr_haystack = (PyArrayObject *)PyArray_FromAny((PyObject *)haystack,
+                                                dtype, 1, 1, flags, NULL);
+    if (arr_haystack == NULL) {
         goto fail;
     }
 
-    if (perm) {
-        /* need ap3 as a 1D aligned, not swapped, array of right type */
-        ap3 = (PyArrayObject *)PyArray_CheckFromAny(perm, NULL,
-                                    1, 1,
-                                    NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED,
-                                    NULL);
-        if (ap3 == NULL) {
+    if (sorter) {
+        PyArray_Descr *dtype_tmp;
+        PyArrayObject *arr_tmp = NULL;
+
+        /* We need sorter to be an integer array */
+        arr_tmp = (PyArrayObject *)PyArray_FromAny(sorter, NULL, 1, 1,
+                                                   0, NULL);
+        if (arr_tmp == NULL) {
             PyErr_SetString(PyExc_TypeError,
-                        "could not parse sorter argument");
+                            "could not parse sorter argument");
             goto fail;
         }
-        if (!PyArray_ISINTEGER(ap3)) {
+        if (!PyArray_ISINTEGER(arr_tmp)) {
+            Py_DECREF(arr_tmp);
             PyErr_SetString(PyExc_TypeError,
-                        "sorter must only contain integers");
+                            "sorter must only contain integers");
             goto fail;
         }
-        /* convert to known integer size */
-        sorter = (PyArrayObject *)PyArray_FromArray(ap3,
-                                    PyArray_DescrFromType(NPY_INTP),
-                                    NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED);
-        if (sorter == NULL) {
-            PyErr_SetString(PyExc_ValueError,
-                        "could not parse sorter argument");
+
+        /*
+         * Force cast to ensure types larger than NPY_INTP do not raise an
+         * error. This is potentially wrong, but it is the same behavior
+         * of indexing.
+         */
+        flags |= NPY_ARRAY_FORCECAST;
+        dtype_tmp = PyArray_DescrFromType(NPY_INTP);
+        arr_sorter = (PyArrayObject *)PyArray_FromArray(arr_tmp, dtype_tmp,
+                                                        flags);
+        Py_DECREF(arr_tmp);
+        if (arr_sorter == NULL) {
             goto fail;
         }
-        if (PyArray_SIZE(sorter) != PyArray_SIZE(ap1)) {
+
+        if (PyArray_SIZE(arr_sorter) != PyArray_SIZE(arr_haystack)) {
             PyErr_SetString(PyExc_ValueError,
                         "sorter.size must equal a.size");
             goto fail;
         }
     }
 
-    /* ret is a contiguous array of intp type to hold returned indexes */
-    ret = (PyArrayObject *)PyArray_New(Py_TYPE(ap2), PyArray_NDIM(ap2),
-                                       PyArray_DIMS(ap2), NPY_INTP,
-                                       NULL, NULL, 0, 0, (PyObject *)ap2);
-    if (ret == NULL) {
+    /* arr_return is a contiguous array of intp type */
+    arr_return = (PyArrayObject *)PyArray_New(Py_TYPE(arr_needle),
+                                        PyArray_NDIM(arr_needle),
+                                        PyArray_DIMS(arr_needle),
+                                        NPY_INTP, NULL, NULL, 0, 0,
+                                        (PyObject *)arr_needle);
+    if (arr_return == NULL) {
         goto fail;
     }
 
-    if (ap3 == NULL) {
+    /*
+     * If the needle is not sorted, process it in a single chunk, but if
+     * it is, to speed things up it has to be processed row by row
+     */
+    len_outer = 1;
+    if (sorted_needle) {
+        npy_intp *shape_needle = PyArray_DIMS(arr_needle);
+
+        for (j = 0; j < PyArray_NDIM(arr_needle) - 1; j++) {
+            len_outer *= *shape_needle++;
+        }
+        len_inner = *shape_needle;
+        stride_outer_needle = len_inner * PyArray_DESCR(arr_needle)->elsize;
+        stride_outer_return = len_inner * NPY_SIZEOF_INTP;
+    }
+    else {
+        len_inner = PyArray_SIZE(arr_needle);
+        stride_outer_needle = 0;
+        stride_outer_return = 0;
+    }
+
+    data_needle = (const char *)PyArray_DATA(arr_needle);
+    data_return = PyArray_BYTES(arr_return);
+
+    if (arr_sorter == NULL) {
         /* do regular binsearch */
-        NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(ap2));
-        binsearch((const char *)PyArray_DATA(ap1),
-                  (const char *)PyArray_DATA(ap2),
-                  (char *)PyArray_DATA(ret),
-                  PyArray_SIZE(ap1), PyArray_SIZE(ap2),
-                  PyArray_STRIDES(ap1)[0], PyArray_DESCR(ap2)->elsize,
-                  NPY_SIZEOF_INTP, ap2);
-        NPY_END_THREADS_DESCR(PyArray_DESCR(ap2));
+        NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(arr_needle));
+        for (j = 0; j < len_outer; j++,
+                                   data_needle += stride_outer_needle,
+                                   data_return += stride_outer_return) {
+            binsearch((const char *)PyArray_DATA(arr_haystack),
+                      data_needle, data_return,
+                      PyArray_SIZE(arr_haystack), len_inner,
+                      PyArray_STRIDE(arr_haystack, 0),
+                      PyArray_DESCR(arr_needle)->elsize, NPY_SIZEOF_INTP,
+                      sorted_needle, arr_needle);
+        }
+        NPY_END_THREADS_DESCR(PyArray_DESCR(arr_needle));
     }
     else {
         /* do binsearch with a sorter array */
         int error = 0;
-        NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(ap2));
-        error = argbinsearch((const char *)PyArray_DATA(ap1),
-                             (const char *)PyArray_DATA(ap2),
-                             (const char *)PyArray_DATA(ap3),
-                             (char *)PyArray_DATA(ret),
-                             PyArray_SIZE(ap1), PyArray_SIZE(ap2),
-                             PyArray_STRIDES(ap1)[0],
-                             PyArray_DESCR(ap2)->elsize,
-                             PyArray_STRIDES(ap3)[0], NPY_SIZEOF_INTP, ap2);
-        NPY_END_THREADS_DESCR(PyArray_DESCR(ap2));
+        NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(arr_needle));
+        for (j = 0; j < len_outer; j++,
+                                   data_needle += stride_outer_needle,
+                                   data_return += stride_outer_return) {
+            error = argbinsearch((const char *)PyArray_DATA(arr_haystack),
+                                 data_needle,
+                                 (const char *)PyArray_DATA(arr_sorter),
+                                 data_return, PyArray_SIZE(arr_haystack),
+                                 len_inner, PyArray_STRIDE(arr_haystack, 0),
+                                 PyArray_DESCR(arr_needle)->elsize,
+                                 PyArray_STRIDE(arr_sorter, 0),
+                                 NPY_SIZEOF_INTP, sorted_needle, arr_needle);
+            NPY_END_THREADS_DESCR(PyArray_DESCR(arr_needle));
+        }
         if (error < 0) {
             PyErr_SetString(PyExc_ValueError,
-                        "Sorter index out of range.");
+                        "sorter index out of range.");
             goto fail;
         }
-        Py_DECREF(ap3);
-        Py_DECREF(sorter);
+        Py_DECREF(arr_sorter);
     }
-    Py_DECREF(ap1);
-    Py_DECREF(ap2);
-    return (PyObject *)ret;
+
+    Py_DECREF(arr_haystack);
+    Py_DECREF(arr_needle);
+    return (PyObject *)arr_return;
 
  fail:
-    Py_XDECREF(ap1);
-    Py_XDECREF(ap2);
-    Py_XDECREF(ap3);
-    Py_XDECREF(sorter);
-    Py_XDECREF(ret);
+    Py_XDECREF(arr_haystack);
+    Py_XDECREF(arr_needle);
+    Py_XDECREF(arr_sorter);
+    Py_XDECREF(arr_return);
     return NULL;
 }
 

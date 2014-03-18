@@ -1363,21 +1363,24 @@ array_argpartition(PyArrayObject *self, PyObject *args, PyObject *kwds)
 static PyObject *
 array_searchsorted(PyArrayObject *self, PyObject *args, PyObject *kwds)
 {
-    static char *kwlist[] = {"keys", "side", "sorter", NULL};
+    static char *kwlist[] = {"keys", "side", "sorter", "sorted_keys", NULL};
     PyObject *keys;
-    PyObject *sorter;
+    PyObject *sorter = NULL;
     NPY_SEARCHSIDE side = NPY_SEARCHLEFT;
+    int sorted_keys = 0;
 
-    sorter = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O&O:searchsorted",
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O&Oi:searchsorted",
                                      kwlist, &keys,
-                                     PyArray_SearchsideConverter, &side, &sorter)) {
+                                     PyArray_SearchsideConverter, &side,
+                                     &sorter, &sorted_keys)) {
         return NULL;
     }
     if (sorter == Py_None) {
         sorter = NULL;
     }
-    return PyArray_Return((PyArrayObject *)PyArray_SearchSorted(self, keys, side, sorter));
+    return PyArray_Return((PyArrayObject *)PyArray_SearchSorted(self, keys,
+                                                    side, sorter,
+                                                    (npy_bool)sorted_keys));
 }
 
 static void

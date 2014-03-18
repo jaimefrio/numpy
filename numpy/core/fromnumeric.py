@@ -950,12 +950,12 @@ def argmin(a, axis=None):
     return argmin(axis)
 
 
-def searchsorted(a, v, side='left', sorter=None):
+def searchsorted(a, keys, side='left', sorter=None, sorted_keys=False):
     """
     Find indices where elements should be inserted to maintain order.
 
     Find the indices into a sorted array `a` such that, if the
-    corresponding elements in `v` were inserted before the indices, the
+    corresponding elements in `keys` were inserted before the indices, the
     order of `a` would be preserved.
 
     Parameters
@@ -964,7 +964,7 @@ def searchsorted(a, v, side='left', sorter=None):
         Input array. If `sorter` is None, then it must be sorted in
         ascending order, otherwise `sorter` must be an array of indices
         that sort it.
-    v : array_like
+    keys : array_like
         Values to insert into `a`.
     side : {'left', 'right'}, optional
         If 'left', the index of the first suitable location found is given.
@@ -972,8 +972,14 @@ def searchsorted(a, v, side='left', sorter=None):
         index, return either 0 or N (where N is the length of `a`).
     sorter : 1-D array_like, optional
         .. versionadded:: 1.7.0
+
         Optional array of integer indices that sort array a into ascending
         order. They are typically the result of argsort.
+    sorted_keys : boolean, optional
+        .. versionadded:: 1.9.0
+
+        If True, keys is assumed to also be sorted, which can dramatically
+        speed-up the search.
 
     Returns
     -------
@@ -987,7 +993,9 @@ def searchsorted(a, v, side='left', sorter=None):
 
     Notes
     -----
-    Binary search is used to find the required insertion points.
+    In the general case binary search is used to find the required insertion
+    points. When `sorted_keys` is set to `True`, a linear search may be used
+    instead, depending on the sizes of the `a` and `keys` arrays.
 
     As of Numpy 1.4.0 `searchsorted` works with real/complex arrays containing
     `nan` values. The enhanced sort order is documented in `sort`.
@@ -1005,8 +1013,8 @@ def searchsorted(a, v, side='left', sorter=None):
     try:
         searchsorted = a.searchsorted
     except AttributeError:
-        return _wrapit(a, 'searchsorted', v, side, sorter)
-    return searchsorted(v, side, sorter)
+        return _wrapit(a, 'searchsorted', keys, side, sorter, sorted_keys)
+    return searchsorted(keys, side, sorter, sorted_keys)
 
 
 def resize(a, new_shape):

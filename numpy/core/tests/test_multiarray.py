@@ -1096,9 +1096,13 @@ class TestMethods(TestCase):
                 a = np.arange(0, 5, dtype=dt)
                 out = np.arange(5)
             b = a.searchsorted(a, 'l')
+            c = a.searchsorted(a, 'l', sorted_keys=True)
             assert_equal(b, out)
+            assert_equal(c, out)
             b = a.searchsorted(a, 'r')
+            c = a.searchsorted(a, 'r', sorted_keys=True)
             assert_equal(b, out + 1)
+            assert_equal(c, out + 1)
 
 
     def test_searchsorted_unicode(self):
@@ -1185,14 +1189,20 @@ class TestMethods(TestCase):
                 a = np.array([1, 0], dtype=dt)
                 s = [1, 0]
                 out = np.array([1, 0])
+                sorted_out = np.array([0, 1])
             else:
                 a = np.array([3, 4, 1, 2, 0], dtype=dt)
                 s = [4, 2, 3, 0, 1]
                 out = np.array([3, 4, 1, 2, 0], dtype=np.intp)
+                sorted_out = np.array([0, 1, 2, 3, 4])
             b = a.searchsorted(a, 'l', s)
+            c = a.searchsorted(np.sort(a), 'l', s)
             assert_equal(b, out)
+            assert_equal(c, sorted_out)
             b = a.searchsorted(a, 'r', s)
+            c = a.searchsorted(np.sort(a), 'r', s)
             assert_equal(b, out + 1)
+            assert_equal(c, sorted_out + 1)
 
         # Test non-contiguous sorter array
         a = np.array([3, 4, 1, 2, 0])
@@ -1205,6 +1215,16 @@ class TestMethods(TestCase):
         assert_equal(b, out)
         b = a.searchsorted(a, 'r', s)
         assert_equal(b, out + 1)
+
+        # Test uintp sorter array
+        a = np.array([3, 4, 1, 2, 0])
+        s = np.array([4, 2, 3, 0, 1], dtype=np.uintp)
+        out = np.array([3, 4, 1, 2, 0], dtype=np.intp)
+        b = a.searchsorted(a, 'l', s)
+        assert_equal(b, out)
+        b = a.searchsorted(a, 'r', s)
+        assert_equal(b, out + 1)
+
 
     def test_partition(self):
         d = np.arange(10)
