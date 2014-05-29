@@ -1908,26 +1908,32 @@ PyArray_LexSort(PyObject *sort_keys, int axis)
  * Binary search is used to find the indexes.
  */
 NPY_NO_EXPORT PyObject *
-PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
-                     NPY_SEARCHSIDE side, PyObject *perm)
+PyArray_SearchSorted(PyArrayObject *hstack, PyObject *needle,
+                     NPY_SEARCHSIDE side, PyObject *sorter)
 {
-    PyArrayObject *ap1 = NULL;
-    PyArrayObject *ap2 = NULL;
-    PyArrayObject *ap3 = NULL;
-    PyArrayObject *sorter = NULL;
+    PyArrayObject *hstack_arr = NULL;
+    PyArrayObject *needle_arr = NULL;
+    PyArrayObject *sorter_arr = NULL;
+    // PyArrayObject *sorter = NULL;
     PyArrayObject *ret = NULL;
     PyArray_Descr *dtype;
-    int ap1_flags = NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ALIGNED;
+    int flags = NPY_ARRAY_ALIGNED;
     PyArray_BinSearchFunc *binsearch = NULL;
     PyArray_ArgBinSearchFunc *argbinsearch = NULL;
     NPY_BEGIN_THREADS_DEF;
 
     /* Find common type */
-    dtype = PyArray_DescrFromObject((PyObject *)op2, PyArray_DESCR(op1));
+    dtype = PyArray_DescrFromObject((PyObject *)needle, PyArray_DESCR(hstack));
     if (dtype == NULL) {
         return NULL;
     }
     /* refs to dtype we own = 1 */
+
+    /* Make sure the dtype is not swapped */
+    if (PyDataType_ISBYTESWAPPED(dtype)) {
+        PyArray_DESCR_REPLACE(dtype);
+        dtype->byteorder = NPY_NATIVE;
+    }
 
     /* Look for binary search function */
     if (perm) {
@@ -1944,37 +1950,49 @@ PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
         return NULL;
     }
 
-    /* need ap2 as contiguous array and of right type */
+    /* Need needle_arr to be either 1-D or contiguous, and of right type */
+    if (PyArray_Check(needle) && PyArray_NDIM((PyArrayObject *)needle) > 1) {
+        flags = NPY_ARRAY_CARRAY_RO;
+    }
+    else {
+        flags = NPY_ARRAY_ALIGNED;
+    }
     /* refs to dtype we own = 1 */
     Py_INCREF(dtype);
     /* refs to dtype we own = 2 */
-    ap2 = (PyArrayObject *)PyArray_CheckFromAny(op2, dtype,
-                                0, 0,
-                                NPY_ARRAY_CARRAY_RO | NPY_ARRAY_NOTSWAPPED,
-                                NULL);
+    needle_arr = (PyArrayObject *)PyArray_FromAny(needle, dtype, 0, 0,
+                                                  flags, NULL);
     /* refs to dtype we own = 1, array creation steals one even on failure */
-    if (ap2 == NULL) {
+    if (needle_arr == NULL) {
         Py_DECREF(dtype);
         /* refs to dtype we own = 0 */
         return NULL;
     }
 
     /*
-     * If the needle (ap2) is larger than the haystack (op1) we copy the
-     * haystack to a contiguous array for improved cache utilization.
+     * If the haystack is not 1-D, we need it as a contiguous array, and
+     * if the needle is contiguous and larger than the haystack, we copy
+     * the haystack to a contiguous array for improved cache utilization.
      */
-    if (PyArray_SIZE(ap2) > PyArray_SIZE(op1)) {
-        ap1_flags |= NPY_ARRAY_CARRAY_RO;
+    if (PyArray_NDIM(hstack) > 1 ||
+        PyArray_SIZE(needle_arr) > PyArray_SIZE(hstack) &&
+        PyArray_IS_C_CONTIGUOUS(needle_arr)) {
+
+        flags = NPY_ARRAY_CARRAY_RO;
     }
-    ap1 = (PyArrayObject *)PyArray_CheckFromAny((PyObject *)op1, dtype,
-                                1, 1, ap1_flags, NULL);
+    else {
+        flags = NPY_ARRAY_ALIGNED;
+    }
+    hstack_arr = (PyArrayObject *)PyArray_FromAny((PyObject *)hstack, dtype,
+                                                  1, 0, flags, NULL);
     /* refs to dtype we own = 0, array creation steals one even on failure */
-    if (ap1 == NULL) {
+    if (hstack_arr == NULL) {
         goto fail;
     }
 
-    if (perm) {
-        /* need ap3 as a 1D aligned, not swapped, array of right type */
+    if (sorter) {
+        /* Sorter is either 1-D or contiguous, and of right type */
+        dtype = PyArray_DescrFromObject((PyObject *)needle, NULL);
         ap3 = (PyArrayObject *)PyArray_CheckFromAny(perm, NULL,
                                     1, 1,
                                     NPY_ARRAY_ALIGNED | NPY_ARRAY_NOTSWAPPED,
@@ -2004,6 +2022,8 @@ PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
             goto fail;
         }
     }
+
+    /* Broadcast array shapes together */
 
     /* ret is a contiguous array of intp type to hold returned indexes */
     ret = (PyArrayObject *)PyArray_New(Py_TYPE(ap2), PyArray_NDIM(ap2),
