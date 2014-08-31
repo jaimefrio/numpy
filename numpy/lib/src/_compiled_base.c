@@ -1180,6 +1180,541 @@ fail:
     return NULL;
 }
 
+typedef enum {
+    NPY_MERGE_JOIN = 0,
+    NPY_MERGE_UNION,
+    NPY_MERGE_INTERSECT,
+    NPY_MERGE_DIFFERENCE,
+    NPY_MERGE_SYMMETRIC_DIFFERENCE
+} NPY_MERGEKIND;
+
+static int
+_mergekind_converter(PyObject *obj, void *addr)
+{
+    NPY_MERGEKIND *kind = (NPY_MERGEKIND *)addr;
+    char *str;
+    PyObject *tmp = NULL;
+
+    if (PyUnicode_Check(obj)) {
+        obj = tmp = PyUnicode_AsASCIIString(obj);
+    }
+
+    str = PyBytes_AsString(obj);
+    if (!str || strlen(str) < 1) {
+        PyErr_SetString(PyExc_ValueError,
+                        "expected non-empty string for keyword 'kind'");
+        Py_XDECREF(tmp);
+        return NPY_FAIL;
+    }
+
+    if (str[0] == 'j' || str[0] == 'J') {
+        *kind = NPY_MERGE_JOIN;
+    }
+    else if (str[0] == 'u' || str[0] == 'U') {
+        *kind = NPY_MERGE_UNION;
+    }
+    else if (str[0] == 'i' || str[0] == 'I') {
+        *kind = NPY_MERGE_INTERSECT;
+    }
+    else if (str[0] == 'd' || str[0] == 'D') {
+        *kind = NPY_MERGE_DIFFERENCE;
+    }
+    else if (str[0] == 's' || str[0] == 'S') {
+        *kind = NPY_MERGE_SYMMETRIC_DIFFERENCE;
+    }
+    else {
+        PyErr_Format(PyExc_ValueError,
+                     "'%s' is an invalid value for keyword 'kind'", str);
+        Py_XDECREF(tmp);
+        return NPY_FAIL;
+    }
+
+    Py_XDECREF(tmp);
+    return NPY_SUCCEED;
+}
+
+#define INIT_MERGE \
+    npy_intp len_ar1 = PyArray_SIZE(ar1); \
+    npy_intp len_ar2 = ar2 ? PyArray_SIZE(ar2) : 0; \
+    npy_intp len_ret = 0; \
+    npy_intp stride_ar1 = PyArray_STRIDE(ar1, 0); \
+    npy_intp stride_ar2 = ar2 ? PyArray_STRIDE(ar2, 0) : 0; \
+    npy_intp stride_ret = ret ? PyArray_STRIDE(ret, 0) : 0; \
+    npy_intp stride_idx_ar1 = idx_ar1 ? PyArray_STRIDE(idx_ar1, 0) : 0; \
+    npy_intp stride_idx_ar2 = idx_ar2 ? PyArray_STRIDE(idx_ar2, 0) : 0; \
+    const char *data_ar1 = (const char *)PyArray_DATA(ar1); \
+    const char *data_ar2 = ar2 ? (const char *)PyArray_DATA(ar2) : NULL; \
+    char *data_ret = ret ? (char *)PyArray_DATA(ret) : NULL; \
+    char *data_idx_ar1 = idx_ar1 ? (char *)PyArray_DATA(idx_ar1) : NULL; \
+    char *data_idx_ar2 = idx_ar2 ? (char *)PyArray_DATA(idx_ar2) : NULL; \
+    const char *repeat; \
+    PyArray_Descr *dtype = PyArray_DESCR(ar1); \
+    PyArray_CompareFunc *cmp = dtype->f->compare; \
+    PyArray_CopySwapFunc *cpy = dtype->f->copyswap; \
+    PyArray_CopySwapNFunc *cpyn = dtype->f->copyswapn;
+
+#define CMP(a, b) \
+    cmp((const void *)data_##a, (void *)data_##b, (void *)a)
+
+#define COPY_FROM(ar) \
+    if (ret) { \
+        cpy((void *)data_ret, (void *)data_##ar, 0, (void *)ret); \
+        data_ret += stride_ret; \
+    } \
+    if (idx_##ar) { \
+        *(npy_intp *)data_idx_##ar = len_ret; \
+        data_idx_##ar += stride_idx_##ar; \
+    } \
+    repeat = (const char *)data_##ar; \
+    data_##ar += stride_##ar; \
+    len_##ar--;\
+
+#define COPY_ALL_FROM(ar) \
+    if (ret && len_##ar) { \
+        cpyn((void *)data_ret, stride_ret, (void *)data_##ar, \
+             stride_##ar, len_##ar, 0, (void *)ret); \
+    } \
+    if (idx_##ar) { \
+        while(len_##ar--) { \
+            *(npy_intp *)data_idx_##ar = len_ret++; \
+            data_idx_##ar += stride_idx_##ar; \
+        } \
+    } \
+    else { \
+        len_ret += len_##ar; \
+        len_##ar = 0; \
+    }
+
+#define DO_NOT_COPY_FROM(ar, idx) \
+    len_##ar--; \
+    data_##ar += stride_##ar; \
+    if (idx_##ar) { \
+        *(npy_intp *)data_idx_##ar = idx; \
+        data_idx_##ar += stride_idx_##ar; \
+    }
+
+#define DO_NOT_COPY_REPEATS_FROM(ar, idx) \
+    while (len_##ar && \
+           cmp((void *)data_##ar, (void *)repeat, (void *)ar) == 0) { \
+        DO_NOT_COPY_FROM(ar, idx); \
+    }
+
+#define SKIP_FROM(ar) DO_NOT_COPY_FROM(ar, len_ret)
+
+#define SKIP_REPEATS_FROM(ar) DO_NOT_COPY_REPEATS_FROM(ar, len_ret)
+
+#define DISCARD_FROM(ar) DO_NOT_COPY_FROM(ar, -1)
+
+#define DISCARD_REPEATS_FROM(ar) DO_NOT_COPY_REPEATS_FROM(ar, -1)
+
+#define COPY_ALL_UNIQUE_FROM(ar) \
+    while (len_##ar) { \
+        COPY_FROM(ar) \
+        SKIP_REPEATS_FROM(ar) \
+        len_ret++; \
+    }
+
+#define DISCARD_ALL_FROM(ar) \
+    if (idx_##ar) { \
+        while (len_##ar--) { \
+            *(npy_intp *)data_idx_##ar = -1; \
+            data_idx_##ar += stride_idx_##ar; \
+        } \
+    }
+
+/*
+ * Merge two sorted, strided, 1d arrays of the same type into a single sorted,
+ * strided, 1d array.
+ * Returns the number of items written to the ret array.
+ */
+static npy_intp
+merge_join(PyArrayObject *ar1, PyArrayObject *ar2, PyArrayObject *ret,
+           PyArrayObject *idx_ar1, PyArrayObject *idx_ar2)
+{
+    INIT_MERGE
+
+    while (len_ar1 && len_ar2) {
+        if (CMP(ar2, ar1) < 0) {
+            COPY_FROM(ar2)
+        }
+        else {
+            COPY_FROM(ar1)
+        }
+        len_ret++;
+    }
+    COPY_ALL_FROM(ar1)
+    COPY_ALL_FROM(ar2)
+
+    return len_ret;
+}
+
+/*
+ * Merge two sorted, strided, 1d arrays of the same type into a single sorted,
+ * strided, 1d array of unique items.
+ * Returns the number of items written to the ret array.
+ */
+static npy_intp
+merge_union(PyArrayObject *ar1, PyArrayObject *ar2, PyArrayObject *ret,
+            PyArrayObject *idx_ar1, PyArrayObject *idx_ar2)
+{
+    INIT_MERGE
+
+    while (len_ar1 && len_ar2) {
+        if (CMP(ar2, ar1) < 0) {
+            COPY_FROM(ar2)
+        }
+        else {
+            COPY_FROM(ar1)
+        }
+        SKIP_REPEATS_FROM(ar1);
+        SKIP_REPEATS_FROM(ar2);
+        len_ret++;
+    }
+    COPY_ALL_UNIQUE_FROM(ar1)
+    COPY_ALL_UNIQUE_FROM(ar2)
+
+    return len_ret;
+}
+
+
+/*
+ * Merge two sorted, strided, 1d arrays of the same type into a single sorted,
+ * strided, 1d array, including only unique items found in both arrays.
+ * Returns the number of items written to the ret array.
+ */
+static npy_intp
+merge_intersect(PyArrayObject *ar1, PyArrayObject *ar2, PyArrayObject *ret,
+                PyArrayObject *idx_ar1, PyArrayObject *idx_ar2)
+{
+    INIT_MERGE
+
+    while (len_ar1 && len_ar2) {
+        int comp_val = CMP(ar1, ar2);
+        if (comp_val < 0) {
+            DISCARD_FROM(ar1)
+        }
+        else if (comp_val > 0) {
+            DISCARD_FROM(ar2)
+        }
+        else {
+            COPY_FROM(ar1)
+            SKIP_REPEATS_FROM(ar1)
+            SKIP_REPEATS_FROM(ar2)
+            len_ret++;
+        }
+    }
+    DISCARD_ALL_FROM(ar1)
+    DISCARD_ALL_FROM(ar2)
+
+    return len_ret;
+}
+
+/*
+ * Merge two sorted, strided, 1d arrays of the same type into a single sorted,
+ * strided, 1d array, including only unique items found in the first, but not
+ * the second array.
+ * Returns the number of items written to the ret array.
+ */
+static npy_intp
+merge_difference(PyArrayObject *ar1, PyArrayObject *ar2, PyArrayObject *ret,
+                 PyArrayObject *idx_ar1, PyArrayObject *idx_ar2)
+{
+    INIT_MERGE
+
+    while (len_ar1 && len_ar2) {
+        int comp_val = CMP(ar1, ar2);
+        if (comp_val < 0) {
+            COPY_FROM(ar1)
+            SKIP_REPEATS_FROM(ar1)
+            len_ret++;
+        }
+        else if (comp_val > 0) {
+            DISCARD_FROM(ar2)
+        }
+        else {
+            repeat = data_ar1;
+            DISCARD_REPEATS_FROM(ar1)
+            DISCARD_REPEATS_FROM(ar2)
+        }
+    }
+    COPY_ALL_UNIQUE_FROM(ar1)
+    DISCARD_ALL_FROM(ar2)
+
+    return len_ret;
+}
+
+/*
+ * Merge two sorted, strided, 1d arrays of the same type into a single sorted,
+ * strided, 1d array, including only unique items found in one array, but not
+ * in both.
+ * Returns the number of items written to the ret array.
+ */
+static npy_intp
+merge_symmetric_difference(PyArrayObject *ar1, PyArrayObject *ar2,
+                           PyArrayObject *ret, PyArrayObject *idx_ar1,
+                           PyArrayObject *idx_ar2)
+{
+    INIT_MERGE
+
+    while (len_ar1 && len_ar2) {
+        int comp_val = CMP(ar1, ar2);
+        if (comp_val < 0) {
+            COPY_FROM(ar1)
+            SKIP_REPEATS_FROM(ar1)
+            len_ret++;
+        }
+        else if (comp_val > 0) {
+            COPY_FROM(ar2)
+            SKIP_REPEATS_FROM(ar2)
+            len_ret++;
+        }
+        else {
+            repeat = (char *)data_ar1;
+            SKIP_REPEATS_FROM(ar1)
+            SKIP_REPEATS_FROM(ar2)
+        }
+    }
+    COPY_ALL_UNIQUE_FROM(ar1)
+    COPY_ALL_UNIQUE_FROM(ar2)
+
+    return len_ret;
+}
+
+#undef DISCARD_ALL_FROM
+#undef COPY_ALL_UNIQUE_FROM
+#undef DISCARD_REPEATS_FROM
+#undef DISCARD_FROM
+#undef SKIP_REPEATS_FROM
+#undef SKIP_FROM
+#undef DO_NOT_COPY_REPEATS_FROM
+#undef DO_NOT_COPY_FROM
+#undef COPY_ALL_FROM
+#undef COPY_FROM
+#undef CMP
+#undef INIT_MERGE
+
+/*
+ * mergesorted(ar1, ar2, argsort=False) takes two sorted arrays, ar1 and
+ * ar2, and merges them into a single sorted array. If argsort == True,
+ * the return is a tuple, the first item being the merged sorted array, the
+ * second an array of indices that sort the concatenation of ar1 and ar2.
+ */
+static PyObject*
+arr_mergesorted(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *ar1 = NULL;
+    PyObject *ar2 = NULL;
+    PyObject *index_flag = NULL;
+    PyObject *merge_flag = NULL;
+    PyArrayObject *arr_ar1 = NULL;
+    PyArrayObject *arr_ar2 = NULL;
+    PyArrayObject *arr_merge = NULL;
+    PyArrayObject *arr_idx_ar1 = NULL;
+    PyArrayObject *arr_idx_ar2 = NULL;
+    NPY_MERGEKIND kind = NPY_MERGE_JOIN;
+    npy_bool do_indices[2] = {0};
+    npy_intp len_merge, len_total, len_ar1, len_ar2, num_rets = 0;
+    PyArray_Descr *dtype = NULL, *dtype1 = NULL;
+    char *kwlist[] = {"ar1", "ar2", "kind", "return_indices",
+                      "return_merge", NULL};
+    NPY_BEGIN_THREADS_DEF;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OO&OO", kwlist,
+                                     &ar1, &ar2, _mergekind_converter,
+                                     &kind, &index_flag, &merge_flag)) {
+        goto fail;
+    }
+
+    /* Find a common dtype for both arrays */
+    dtype1 = PyArray_DescrFromObject(ar1, NULL);
+    if (dtype1 == NULL) {
+        goto fail;
+    }
+
+    if (ar2 == NULL) {
+        dtype = dtype1;
+    }
+    else {
+        dtype = PyArray_DescrFromObject(ar2, dtype1);
+        Py_DECREF(dtype1);
+        if (dtype == NULL) {
+            goto fail;
+        }
+    }
+
+    /* Make sure the common dtype is in native byte order */
+    if (PyDataType_ISBYTESWAPPED(dtype)) {
+        PyArray_DESCR_REPLACE(dtype);
+        dtype->byteorder = NPY_NATIVE;
+    }
+
+    /* check that the common dtype has a comparison function */
+    if (dtype->f->compare == NULL) {
+        PyErr_SetString(PyExc_TypeError, "compare not supported for type");
+        Py_DECREF(dtype);
+        goto fail;
+    }
+
+    /* Convert the inputs to aligned arrays of the same non-swapped type */
+    Py_INCREF(dtype);
+    arr_ar1 = (PyArrayObject *)PyArray_FromAny(ar1, dtype, 1, 1,
+                                               NPY_ARRAY_ALIGNED, NULL);
+    if (arr_ar1 == NULL) {
+        Py_DECREF(dtype);
+        goto fail;
+    }
+    len_ar1 = PyArray_SIZE(arr_ar1);
+
+    if (ar2 != NULL) {
+        Py_INCREF(dtype);
+        arr_ar2 = (PyArrayObject *)PyArray_FromAny(ar2, dtype, 1, 1,
+                                                   NPY_ARRAY_ALIGNED, NULL);
+        if (arr_ar2 == NULL) {
+            Py_DECREF(dtype);
+            goto fail;
+        }
+        len_ar2 = PyArray_SIZE(arr_ar2);
+    }
+
+    /* Default value for 'return_merge' is True */
+    if (merge_flag == NULL || PyObject_IsTrue(merge_flag)) {
+        len_merge = len_ar1;
+        if (arr_ar2 != NULL && kind != NPY_MERGE_DIFFERENCE) {
+                len_merge += len_ar2;
+        }
+        /* arr_merge consumes the last reference to dtype */
+        arr_merge = (PyArrayObject *)PyArray_SimpleNewFromDescr(1, &len_merge,
+                                                                dtype);
+        if (arr_merge == NULL) {
+            goto fail;
+        }
+        num_rets++;
+    }
+    else {
+        Py_DECREF(dtype);
+    }
+
+    /* Default value for 'return_indices' is both False */
+    if (index_flag) {
+        if (PyTuple_Check(index_flag)) {
+            if (PyTuple_Size(index_flag) != 2) {
+                goto fail;
+            }
+            do_indices[0] = PyObject_IsTrue(PyTuple_GET_ITEM(index_flag, 0));
+            do_indices[1] = PyObject_IsTrue(PyTuple_GET_ITEM(index_flag, 1));
+        }
+        else {
+            do_indices[0] = do_indices[1] = PyObject_IsTrue(index_flag);
+        }
+    }
+
+    if (do_indices[0]) {
+        arr_idx_ar1 = (PyArrayObject *)PyArray_SimpleNew(1, &len_ar1,
+                                                         NPY_INTP);
+        if (arr_idx_ar1 == NULL) {
+            goto fail;
+        }
+        num_rets++;
+    }
+
+    if (arr_ar2 != NULL && do_indices[1]) {
+        arr_idx_ar2 = (PyArrayObject *)PyArray_SimpleNew(1, &len_ar2,
+                                                         NPY_INTP);
+        if (arr_idx_ar2 == NULL) {
+            goto fail;
+        }
+        if (kind == NPY_MERGE_DIFFERENCE) {
+            /* The second index array of a difference is all -1s */
+            PyObject *fill = PyInt_FromLong(-1);
+            if (!PyArray_FillWithScalar(arr_idx_ar2, fill)) {
+                Py_DECREF(fill);
+                goto fail;
+            }
+            Py_DECREF(fill);
+        }
+        num_rets++;
+    }
+
+    /* Call the actual merging function */
+    NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(arr_ar1));
+    switch (kind) {
+        case NPY_MERGE_JOIN:
+            len_total = merge_join(arr_ar1, arr_ar2, arr_merge,
+                                   arr_idx_ar1, arr_idx_ar2);
+            break;
+        case NPY_MERGE_UNION:
+            len_total = merge_union(arr_ar1, arr_ar2, arr_merge,
+                                    arr_idx_ar1, arr_idx_ar2);
+            break;
+        case NPY_MERGE_INTERSECT:
+            len_total = merge_intersect(arr_ar1, arr_ar2, arr_merge,
+                                        arr_idx_ar1, arr_idx_ar2);
+            break;
+        case NPY_MERGE_DIFFERENCE:
+            len_total = merge_difference(arr_ar1, arr_ar2, arr_merge,
+                                         arr_idx_ar1, NULL);
+            break;
+        case NPY_MERGE_SYMMETRIC_DIFFERENCE:
+            len_total = merge_symmetric_difference(arr_ar1, arr_ar2,
+                                                   arr_merge,
+                                                   arr_idx_ar1, arr_idx_ar2);
+            break;
+        default:
+            len_total = 0;
+    }
+    NPY_END_THREADS_DESCR(PyArray_DESCR(arr_ar1));
+
+    if (arr_merge != NULL && len_total < len_merge) {
+        PyArray_Dims new_shape = {&len_total, 1};
+        PyObject *tmp;
+        tmp = PyArray_Resize(arr_merge, &new_shape, 0, 0);
+        if (tmp == NULL) {
+            goto fail;
+        }
+        Py_DECREF(tmp);
+    }
+
+    Py_DECREF(arr_ar1);
+    Py_XDECREF(arr_ar2);
+    if (num_rets == 0) {
+         Py_RETURN_NONE;
+    }
+    else if (num_rets == 1) {
+        if (arr_merge) {
+            return arr_merge;
+        }
+        if (arr_idx_ar1) {
+            return arr_idx_ar1;
+        }
+        if (arr_idx_ar2) {
+            return arr_idx_ar2;
+        }
+    }
+    else {
+        PyObject *ret = PyTuple_New(num_rets);
+        Py_ssize_t j = 0;
+        if (arr_merge) {
+            PyTuple_SetItem(ret, j, arr_merge);
+            j++;
+        }
+        if (arr_idx_ar1) {
+            PyTuple_SetItem(ret, j, arr_idx_ar1);
+            j++;
+        }
+        if (arr_idx_ar2) {
+            PyTuple_SetItem(ret, j, arr_idx_ar2);
+        }
+        return ret;
+    }
+
+    fail:
+        Py_XDECREF(arr_ar1);
+        Py_XDECREF(arr_ar2);
+        Py_XDECREF(arr_merge);
+        Py_XDECREF(arr_idx_ar1);
+        Py_XDECREF(arr_idx_ar2);
+        return NULL;
+}
 
 static PyTypeObject *PyMemberDescr_TypePtr = NULL;
 static PyTypeObject *PyGetSetDescr_TypePtr = NULL;
@@ -1625,6 +2160,8 @@ static struct PyMethodDef methods[] = {
     {"packbits", (PyCFunction)io_pack,
         METH_VARARGS | METH_KEYWORDS, NULL},
     {"unpackbits", (PyCFunction)io_unpack,
+        METH_VARARGS | METH_KEYWORDS, NULL},
+    {"mergesorted", (PyCFunction)arr_mergesorted,
         METH_VARARGS | METH_KEYWORDS, NULL},
     {NULL, NULL, 0, NULL}    /* sentinel */
 };

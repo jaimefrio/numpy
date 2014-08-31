@@ -5196,6 +5196,83 @@ add_newdoc('numpy.lib._compiled_base', 'unpackbits',
 
     """)
 
+add_newdoc('numpy.lib._compiled_base', 'mergesorted',
+    """
+    mergesorted(ar1, ar2=None, kind='join', indices=False)
+
+    Merges two sorted arrays into a single, sorted array.
+
+    Each element of `myarray` represents a bit-field that should be unpacked
+    into a binary-valued output array. The shape of the output array is either
+    1-D (if `axis` is None) or the same shape as the input array with unpacking
+    done along the axis specified.
+
+    Parameters
+    ----------
+    ar1 : array-like
+        Input array.
+    ar2 : array-like, optional
+        Input array.
+    kind : {'join', 'union', 'intersection', 'difference',
+            'symmetric_difference'}, optional
+        'join':
+            The default mode, includes all items from both arrays
+            in the output, equivalent to ``np.sort((concatenate
+        'union':
+            Set union, the output includes all unique items from
+            both input arrays.
+        'intersection':
+            Set intersection, the output includes all unique items
+            common to both arrays.
+        'difference':
+            Set difference, the output includes all unique items of
+            the first array not found in the second.
+        'symmetric_difference':
+            Set symmetric difference, the output includes all unique
+            items found in one array, but not the other.
+    return_indices : bool or tuple of bools, optional
+        Flag indicating whether to also return index arrays with the
+        position in the return array of the items of each input array.
+        A tuple of two bools can be used to return only one of the
+        index arrays.
+    return_merge: bool
+        Flag indicating whther to return the merged array.
+
+    Returns
+    -------
+    merge : ndarray, optional
+
+    index1: ndarray, optional
+        The ending position of the items of `ar1` in `merge`. Items that
+        did not make it into `merge` will be indicated with `-1`. If `ar1`
+        contains repeats
+
+    Notes
+    -----
+    The optional index arrays. If the return array contains only unique
+    items, then repeated items in the input arrays will all be mapped to
+    the unique item in the return
+
+    See Also
+    --------
+    packbits : Packs the elements of a binary-valued array into bits in a uint8
+               array.
+
+    Examples
+    --------
+    >>> a = np.array([[2], [7], [23]], dtype=np.uint8)
+    >>> a
+    array([[ 2],
+           [ 7],
+           [23]], dtype=uint8)
+    >>> b = np.unpackbits(a, axis=1)
+    >>> b
+    array([[0, 0, 0, 0, 0, 0, 1, 0],
+           [0, 0, 0, 0, 0, 1, 1, 1],
+           [0, 0, 0, 1, 0, 1, 1, 1]], dtype=uint8)
+
+    """)
+
 
 ##############################################################################
 #
