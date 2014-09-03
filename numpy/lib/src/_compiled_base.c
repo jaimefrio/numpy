@@ -6,6 +6,7 @@
 #include "npy_config.h"
 #include "numpy/ufuncobject.h"
 #include "string.h"
+#include "hash_table.h"
 
 
 static npy_intp
@@ -1654,6 +1655,187 @@ io_unpack(PyObject *NPY_UNUSED(self), PyObject *args, PyObject *kwds)
     return pack_or_unpack_bits(obj, axis, 1);
 }
 
+static PyObject *
+arr_unique(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *arr;
+    PyArrayObject *arr_arr = NULL;
+    PyArrayObject *arr_ret = NULL;
+    PyArray_Descr *dtype;
+    HashTable *ht = NULL;
+    char *arr_data;
+    npy_intp arr_stride;
+    npy_intp arr_len;
+    npy_bool *ret_data;
+
+    char *kwlist[] = {"ar", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", kwlist, &arr)) {
+        goto fail;
+    }
+
+    dtype = PyArray_DescrFromObject(arr, NULL);
+    if (dtype == NULL) {
+        goto fail;
+    }
+
+    if (PyDataType_ISBYTESWAPPED(dtype)) {
+        PyArray_DESCR_REPLACE(dtype);
+        dtype->byteorder = NPY_NATIVE;
+    }
+
+    arr_arr = (PyArrayObject *)PyArray_FromAny(arr, dtype, 1, 1,
+                                               NPY_ARRAY_ALIGNED, NULL);
+    if (arr_arr == NULL) {
+        goto fail;
+    }
+    arr_data = PyArray_DATA(arr_arr);
+    arr_stride = PyArray_STRIDE(arr_arr, 0);
+    arr_len = PyArray_SIZE(arr_arr);
+
+    // fprintf(stderr, "About to create hash table...\n");
+
+    ht = HashTable_New(arr_arr);
+    if (ht == NULL) {
+        goto fail;
+    }
+
+    // fprintf(stderr, "About to add items to hash table...\n");
+
+    while(arr_len--) {
+        if (HashTable_Insert(ht, (void *)arr_data) < 0) {
+            goto fail;
+        }
+        arr_data += arr_stride;
+    }
+
+    // fprintf(stderr, "About to create array from hash table...\n");
+
+    Py_INCREF(ht->dtype);
+    arr_ret = (PyArrayObject *)PyArray_SimpleNewFromDescr(1, &ht->used,
+                                                          ht->dtype);
+    if (arr_ret == NULL) {
+        goto fail;
+    }
+
+    HashTable_CopyToArray(ht, arr_ret);
+
+    Py_DECREF(arr_arr);
+    HashTable_Dealloc(ht);
+    return (PyObject *)arr_ret;
+
+    fail:
+        HashTable_Dealloc(ht);
+        Py_XDECREF(arr_arr);
+        Py_XDECREF(arr_ret);
+        return NULL;
+}
+
+static PyObject *
+arr_in1d(PyObject *self, PyObject *args, PyObject *kwds)
+{
+    PyObject *ar1;
+    PyObject *ar2;
+    PyArrayObject *arr_ar1 = NULL;
+    PyArrayObject *arr_ar2 = NULL;
+    PyArrayObject *arr_ret = NULL;
+    PyArray_Descr *dtype, *dtype1;
+    HashTable *ht = NULL;
+    int inv = 0, not_inv;
+    char *arr_data, *ret_data;
+    npy_intp arr_stride, arr_len, ret_stride;
+    HashTable_HashFunc *hash_func;
+
+    char *kwlist[] = {"ar1", "ar2", "invert", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|i", kwlist,
+                                     &ar1, &ar2, &inv)) {
+        goto fail;
+    }
+
+    inv = inv ? 0 : 1;
+    not_inv = inv ? 0 : 1;
+
+    dtype1 = PyArray_DescrFromObject(ar1, NULL);
+    if (dtype1 == NULL) {
+        goto fail;
+    }
+
+    dtype = PyArray_DescrFromObject(ar2, dtype1);
+    Py_DECREF(dtype1);
+    if (dtype == NULL) {
+        goto fail;
+    }
+
+    if (PyDataType_ISBYTESWAPPED(dtype)) {
+        PyArray_DESCR_REPLACE(dtype);
+        dtype->byteorder = NPY_NATIVE;
+    }
+
+    Py_INCREF(dtype);
+    arr_ar1 = (PyArrayObject *)PyArray_FromAny(ar1, dtype, 1, 1,
+                                               NPY_ARRAY_ALIGNED, NULL);
+    if (arr_ar1 == NULL) {
+        Py_DECREF(dtype);
+        goto fail;
+    }
+
+    arr_ar2 = (PyArrayObject *)PyArray_FromAny(ar2, dtype, 1, 1,
+                                               NPY_ARRAY_ALIGNED, NULL);
+    if (arr_ar2 == NULL) {
+        goto fail;
+    }
+
+    ht = HashTable_New(arr_ar2);
+    if (ht == NULL) {
+        goto fail;
+    }
+
+    arr_data = PyArray_DATA(arr_ar2);
+    arr_stride = PyArray_STRIDE(arr_ar2, 0);
+    arr_len = PyArray_SIZE(arr_ar2);
+
+    while (arr_len--) {
+        if (HashTable_Insert(ht, (void *)arr_data) < 0) {
+            goto fail;
+        }
+        arr_data += arr_stride;
+    }
+
+    arr_data = PyArray_DATA(arr_ar1);
+    arr_stride = PyArray_STRIDE(arr_ar1, 0);
+    arr_len = PyArray_SIZE(arr_ar1);
+
+    arr_ret = (PyArrayObject *)PyArray_SimpleNew(1, &arr_len, NPY_BOOL);
+    if (arr_ret == NULL) {
+        goto fail;
+    }
+
+    ret_data = PyArray_DATA(arr_ret);
+    ret_stride = PyArray_STRIDE(arr_ret, 0);
+    hash_func = ht->hash_func;
+
+    while (arr_len--) {
+        HashTableEntry *hte = HashTable_LookUp(ht, (void *)arr_data,
+                                               hash_func((void *)arr_data));
+        *(npy_bool *)ret_data = hte->value ? 1 : 0;
+        ret_data += ret_stride;
+        arr_data += arr_stride;
+    }
+
+    Py_DECREF(arr_ar1);
+    Py_DECREF(arr_ar2);
+    HashTable_Dealloc(ht);
+    return (PyObject *)arr_ret;
+
+    fail:
+        HashTable_Dealloc(ht);
+        Py_XDECREF(arr_ar1);
+        Py_XDECREF(arr_ar2);
+        Py_XDECREF(arr_ret);
+        return NULL;
+}
+
 /* The docstrings for many of these methods are in add_newdocs.py. */
 static struct PyMethodDef methods[] = {
     {"_insert", (PyCFunction)arr_insert,
@@ -1676,6 +1858,11 @@ static struct PyMethodDef methods[] = {
         METH_VARARGS | METH_KEYWORDS, NULL},
     {"unpackbits", (PyCFunction)io_unpack,
         METH_VARARGS | METH_KEYWORDS, NULL},
+    {"_unique", (PyCFunction)arr_unique,
+        METH_VARARGS | METH_KEYWORDS, NULL},
+    {"_in1d", (PyCFunction)arr_in1d,
+        METH_VARARGS | METH_KEYWORDS, NULL},
+
     {NULL, NULL, 0, NULL}    /* sentinel */
 };
 
