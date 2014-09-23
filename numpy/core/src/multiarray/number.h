@@ -74,4 +74,8 @@ NPY_NO_EXPORT int
 needs_right_binop_forward(PyObject *self, PyObject *other,
                           const char *right_name, int is_inplace);
 
+NPY_NO_EXPORT PyObject *
+PyArray_GenericInplaceBinaryFunction(PyArrayObject *m1,
+                                     PyObject *m2, PyObject *op);
+
 #endif

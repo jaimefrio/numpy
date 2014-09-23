@@ -817,8 +817,9 @@ def flatnonzero(a):
     return a.ravel().nonzero()[0]
 
 _mode_from_name_dict = {'v': 0,
-                        's' : 1,
-                        'f' : 2}
+                        's': 1,
+                        'f': 2,
+                        'w': 3}
 
 def _mode_from_name(mode):
     if isinstance(mode, basestring):
@@ -841,7 +842,7 @@ def correlate(a, v, mode='valid', old_behavior=False):
     ----------
     a, v : array_like
         Input sequences.
-    mode : {'valid', 'same', 'full'}, optional
+    mode : {'valid', 'same', 'full', 'warp'}, optional
         Refer to the `convolve` docstring.  Note that the default
         is `valid`, unlike `convolve`, which uses `full`.
     old_behavior : bool
@@ -923,7 +924,7 @@ def convolve(a,v,mode='full'):
         First one-dimensional input array.
     v : (M,) array_like
         Second one-dimensional input array.
-    mode : {'full', 'valid', 'same'}, optional
+    mode : {'full', 'valid', 'same', 'wrap'}, optional
         'full':
           By default, mode is 'full'.  This returns the convolution
           at each point of overlap, with an output shape of (N+M-1,). At
@@ -939,6 +940,13 @@ def convolve(a,v,mode='full'):
           ``max(M, N) - min(M, N) + 1``.  The convolution product is only given
           for points where the signals overlap completely.  Values outside
           the signal boundary have no effect.
+
+        'wrap':
+          .. versionadded:: 1.10.0
+          Mode `wrap` returns output of length ``max(M, N)``. At points
+          where the signals do not overlap completely, the kernel is
+          wrapped around to the other end of the data, as if both
+          signals were periodic.
 
     Returns
     -------

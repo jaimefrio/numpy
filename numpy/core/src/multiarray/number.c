@@ -315,7 +315,7 @@ PyArray_GenericUnaryFunction(PyArrayObject *m1, PyObject *op)
     return PyObject_CallFunctionObjArgs(op, m1, NULL);
 }
 
-static PyObject *
+NPY_NO_EXPORT PyObject *
 PyArray_GenericInplaceBinaryFunction(PyArrayObject *m1,
                                      PyObject *m2, PyObject *op)
 {

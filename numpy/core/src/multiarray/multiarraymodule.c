@@ -1149,7 +1149,7 @@ static PyArrayObject*
 _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
                    int mode, int *inverted)
 {
-    PyArrayObject *ret;
+    PyArrayObject *ret = NULL, *aux = NULL, *view = NULL;
     npy_intp length;
     npy_intp i, n1, n2, n, n_left, n_right;
     npy_intp is1, is2, os;
@@ -1169,19 +1169,20 @@ _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
         n1 = n2;
         n2 = i;
         *inverted = 1;
-    } else {
+    }
+    else {
         *inverted = 0;
     }
 
     length = n1;
     n = n2;
-    switch(mode) {
+    switch (mode) {
     case 0:
         length = length - n + 1;
         n_left = n_right = 0;
         break;
     case 1:
-        n_left = (npy_intp)(n/2);
+        n_left = n / 2;
         n_right = n - n_left - 1;
         break;
     case 2:
@@ -1189,8 +1190,11 @@ _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
         n_left = n - 1;
         length = length + n - 1;
         break;
+    case 3:
+        n_left = n_right = n - 1;
+        break;
     default:
-        PyErr_SetString(PyExc_ValueError, "mode must be 0, 1, or 2");
+        PyErr_SetString(PyExc_ValueError, "mode must be 0, 1, 2 or 3");
         return NULL;
     }
 
@@ -1202,14 +1206,14 @@ _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
     if (ret == NULL) {
         return NULL;
     }
+
     dot = PyArray_DESCR(ret)->f->dotfunc;
     if (dot == NULL) {
         PyErr_SetString(PyExc_ValueError,
                         "function not available for this data type");
-        goto clean_ret;
+         goto cleanup;
     }
 
-    NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(ret));
     is1 = PyArray_STRIDES(ap1)[0];
     is2 = PyArray_STRIDES(ap2)[0];
     op = PyArray_DATA(ret);
@@ -1217,11 +1221,35 @@ _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
     ip1 = PyArray_DATA(ap1);
     ip2 = PyArray_BYTES(ap2) + n_left*is2;
     n = n - n_left;
+    if (mode == 3) {
+        char *ret_view = op + (length - n_right) * os;
+        aux = (PyArrayObject *)PyArray_New(Py_TYPE(ret), 1, &n_left,
+                                           typenum, NULL, NULL, 0, 0,
+                                           (PyObject *)ret);
+        if (aux == NULL) {
+            goto cleanup;
+        }
+        view = (PyArrayObject *)PyArray_New(Py_TYPE(ret), 1, &n_right,
+                                            typenum, PyArray_STRIDES(ret),
+                                            ret_view,
+                                            PyArray_DESCR(ret)->elsize,
+                                            PyArray_FLAGS(ret),
+                                            (PyObject *)ret);
+        if (view == NULL) {
+            goto cleanup;
+        }
+        op = PyArray_DATA(aux);
+    }
+
+    NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(ret));
     for (i = 0; i < n_left; i++) {
         dot(ip1, is1, ip2, is2, op, n, ret);
         n++;
         ip2 -= is2;
         op += os;
+    }
+    if (mode == 3) {
+        op = PyArray_DATA(ret);
     }
     if (small_correlate(ip1, is1, n1 - n2 + 1, PyArray_TYPE(ap1),
                         ip2, is2, n, PyArray_TYPE(ap2),
@@ -1236,22 +1264,30 @@ _pyarray_correlate(PyArrayObject *ap1, PyArrayObject *ap2, int typenum,
             op += os;
         }
     }
+
     for (i = 0; i < n_right; i++) {
         n--;
         dot(ip1, is1, ip2, is2, op, n, ret);
         ip1 += is1;
         op += os;
     }
-
     NPY_END_THREADS_DESCR(PyArray_DESCR(ret));
-    if (PyErr_Occurred()) {
-        goto clean_ret;
+
+    if (mode == 3) {
+        PyArray_GenericInplaceBinaryFunction(view, (PyObject *)aux, n_ops.add);
     }
 
+    if (PyErr_Occurred()) {
+        goto cleanup;
+    }
+
+    Py_XDECREF(aux);
+    Py_XDECREF(view);
     return ret;
 
-clean_ret:
-    Py_DECREF(ret);
+cleanup:
+    Py_XDECREF(ret);
+    Py_XDECREF(aux);
     return NULL;
 }
 
@@ -2226,6 +2262,7 @@ array_matrixproduct(PyObject *NPY_UNUSED(dummy), PyObject *args, PyObject* kwds)
     PyObject *v, *a, *o = NULL;
     PyArrayObject *ret;
     char* kwlist[] = {"a", "b", "out", NULL };
+    PyObject *module;
 
     if (cached_npy_dot == NULL) {
         PyObject *module = PyImport_ImportModule("numpy.core.multiarray");
