@@ -426,49 +426,49 @@ int
 /**end repeat**/
 
 
-/*
- *****************************************************************************
- **                             STRING SORTS                                **
- *****************************************************************************
- */
+// /*
+ // *****************************************************************************
+ // **                             STRING SORTS                                **
+ // *****************************************************************************
+ // */
 
 
-/**begin repeat
- *
- * #TYPE = STRING, UNICODE#
- * #suff = string, unicode#
- * #type = npy_char, npy_ucs4#
- */
+// /**begin repeat
+ // *
+ // * #TYPE = STRING, UNICODE#
+ // * #suff = string, unicode#
+ // * #type = npy_char, npy_ucs4#
+ // */
 
-int
-introselect_@suff@(@type@ *start, npy_intp num, npy_intp kth, PyArrayObject *arr)
-{
-    return quicksort_@suff@(start, num, arr);
-}
+// int
+// introselect_@suff@(@type@ *start, npy_intp num, npy_intp kth, PyArrayObject *arr)
+// {
+    // return quicksort_@suff@(start, num, arr);
+// }
 
-int
-aintroselect_@suff@(@type@ *v, npy_intp* tosort, npy_intp num, npy_intp kth, void *null)
-{
-    return aquicksort_@suff@(v, tosort, num, null);
-}
+// int
+// aintroselect_@suff@(@type@ *v, npy_intp* tosort, npy_intp num, npy_intp kth, void *null)
+// {
+    // return aquicksort_@suff@(v, tosort, num, null);
+// }
 
-/**end repeat**/
-
-
-/*
- *****************************************************************************
- **                             GENERIC SORT                                **
- *****************************************************************************
- */
+// /**end repeat**/
 
 
-/*
- * This sort has almost the same signature as libc qsort and is intended to
- * supply an error return for compatibility with the other generic sort
- * kinds.
- */
-int
-npy_introselect(void *base, size_t num, size_t size, size_t kth, npy_comparator cmp)
-{
-    return npy_quicksort(base, num, size, cmp);
-}
+// /*
+ // *****************************************************************************
+ // **                             GENERIC SORT                                **
+ // *****************************************************************************
+ // */
+
+
+// /*
+ // * This sort has almost the same signature as libc qsort and is intended to
+ // * supply an error return for compatibility with the other generic sort
+ // * kinds.
+ // */
+// int
+// npy_introselect(void *base, size_t num, size_t size, size_t kth, npy_comparator cmp)
+// {
+    // return npy_quicksort(base, num, size, cmp);
+// }
