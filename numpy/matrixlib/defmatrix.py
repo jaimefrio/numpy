@@ -812,7 +812,7 @@ class matrix(N.ndarray):
                 [3]])
 
         """
-        return N.ndarray.argmax(self, axis, out)._align(axis)
+        return asmatrix(N.ndarray.argmax(self, axis, out))._align(axis)
 
     def min(self, axis=None, out=None):
         """
@@ -882,7 +882,7 @@ class matrix(N.ndarray):
                 [3]])
 
         """
-        return N.ndarray.argmin(self, axis, out)._align(axis)
+        return asmatrix(N.ndarray.argmin(self, axis, out))._align(axis)
 
     def ptp(self, axis=None, out=None):
         """

@@ -951,9 +951,9 @@ _new_argsortlike(PyArrayObject *op, int axis, PyArray_ArgSortFunc *argsort,
 
     NPY_BEGIN_THREADS_DEF;
 
-    rop = (PyArrayObject *)PyArray_New(Py_TYPE(op), PyArray_NDIM(op),
+    rop = (PyArrayObject *)PyArray_New(&PyArray_Type, PyArray_NDIM(op),
                                        PyArray_DIMS(op), NPY_INTP,
-                                       NULL, NULL, 0, 0, (PyObject *)op);
+                                       NULL, NULL, 0, 0, NULL);
     if (rop == NULL) {
         return NULL;
     }

@@ -103,10 +103,9 @@ _argmin_or_argmax(PyArrayObject *op, int axis, PyArrayObject *out, int do_max)
     }
 
     if (!out) {
-        rp = (PyArrayObject *)PyArray_New(Py_TYPE(ap), PyArray_NDIM(ap)-1,
+        rp = (PyArrayObject *)PyArray_New(&PyArray_Type, PyArray_NDIM(ap)-1,
                                           PyArray_DIMS(ap), NPY_INTP,
-                                          NULL, NULL, 0, 0,
-                                          (PyObject *)ap);
+                                          NULL, NULL, 0, 0, NULL);
         if (rp == NULL) {
             goto fail;
         }

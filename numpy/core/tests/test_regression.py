@@ -1098,9 +1098,6 @@ class TestRegression(TestCase):
         assert_(dat.info == 'jubba')
         assert_(dat.all(1).info == 'jubba')
         assert_(dat.any(1).info == 'jubba')
-        assert_(dat.argmax(1).info == 'jubba')
-        assert_(dat.argmin(1).info == 'jubba')
-        assert_(dat.argsort(1).info == 'jubba')
         assert_(dat.astype(TestArray).info == 'jubba')
         assert_(dat.byteswap().info == 'jubba')
         assert_(dat.clip(2, 7).info == 'jubba')
@@ -1140,6 +1137,11 @@ class TestRegression(TestCase):
         assert_(dat.T.info == 'jubba')
         assert_(dat.var(1).info == 'jubba')
         assert_(dat.view(TestArray).info == 'jubba')
+        # These methods do not preserve subclasses
+        assert_(type(dat.argmax(1)) is np.ndarray)
+        assert_(type(dat.argmin(1)) is np.ndarray)
+        assert_(type(dat.argsort(1)) is np.ndarray)
+
 
     def test_recarray_tolist(self, level=rlevel):
         """Ticket #793, changeset r5215
