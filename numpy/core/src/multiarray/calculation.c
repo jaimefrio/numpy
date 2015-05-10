@@ -33,15 +33,13 @@ power_of_ten(int n)
     return ret;
 }
 
-/*NUMPY_API
- * ArgMax
- */
-NPY_NO_EXPORT PyObject *
-PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
+static PyObject*
+_argmin_or_argmax(PyArrayObject *op, int axis, PyArrayObject *out, int do_max)
 {
     PyArrayObject *ap = NULL, *rp = NULL;
     PyArray_ArgFunc* arg_func;
     char *ip;
+    char *name = do_max ? "argmax" : "argmin";
     npy_intp *rptr;
     npy_intp i, n, m;
     int elsize;
@@ -85,7 +83,12 @@ PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
     if (ap == NULL) {
         return NULL;
     }
-    arg_func = PyArray_DESCR(ap)->f->argmax;
+    if (do_max) {
+        arg_func = PyArray_DESCR(ap)->f->argmax;
+    }
+    else{
+        arg_func = PyArray_DESCR(ap)->f->argmin;
+    }
     if (arg_func == NULL) {
         PyErr_SetString(PyExc_TypeError,
                 "data type not ordered");
@@ -94,8 +97,8 @@ PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
     elsize = PyArray_DESCR(ap)->elsize;
     m = PyArray_DIMS(ap)[PyArray_NDIM(ap)-1];
     if (m == 0) {
-        PyErr_SetString(PyExc_ValueError,
-                "attempt to get argmax of an empty sequence");
+        PyErr_Format(PyExc_ValueError,
+                "attempt to get %s of an empty sequence", name);
         goto fail;
     }
 
@@ -112,8 +115,8 @@ PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
         if ((PyArray_NDIM(out) != PyArray_NDIM(ap) - 1) ||
                 !PyArray_CompareLists(PyArray_DIMS(out), PyArray_DIMS(ap),
                                       PyArray_NDIM(out))) {
-            PyErr_SetString(PyExc_ValueError,
-                    "output array does not match result of np.argmax.");
+            PyErr_Format(PyExc_ValueError,
+                    "output array does not match result of np.%s.", name);
             goto fail;
         }
         rp = (PyArrayObject *)PyArray_FromArray(out,
@@ -149,118 +152,22 @@ PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
 }
 
 /*NUMPY_API
+ * ArgMax
+ */
+NPY_NO_EXPORT PyObject *
+PyArray_ArgMax(PyArrayObject *op, int axis, PyArrayObject *out)
+{
+    return _argmin_or_argmax(op, axis, out, 1);
+}
+
+/*NUMPY_API
  * ArgMin
  */
 NPY_NO_EXPORT PyObject *
 PyArray_ArgMin(PyArrayObject *op, int axis, PyArrayObject *out)
 {
-    PyArrayObject *ap = NULL, *rp = NULL;
-    PyArray_ArgFunc* arg_func;
-    char *ip;
-    npy_intp *rptr;
-    npy_intp i, n, m;
-    int elsize;
-    NPY_BEGIN_THREADS_DEF;
+    return _argmin_or_argmax(op, axis, out, 0);
 
-    if ((ap = (PyArrayObject *)PyArray_CheckAxis(op, &axis, 0)) == NULL) {
-        return NULL;
-    }
-    /*
-     * We need to permute the array so that axis is placed at the end.
-     * And all other dimensions are shifted left.
-     */
-    if (axis != PyArray_NDIM(ap)-1) {
-        PyArray_Dims newaxes;
-        npy_intp dims[NPY_MAXDIMS];
-        int i;
-
-        newaxes.ptr = dims;
-        newaxes.len = PyArray_NDIM(ap);
-        for (i = 0; i < axis; i++) {
-            dims[i] = i;
-        }
-        for (i = axis; i < PyArray_NDIM(ap) - 1; i++) {
-            dims[i] = i + 1;
-        }
-        dims[PyArray_NDIM(ap) - 1] = axis;
-        op = (PyArrayObject *)PyArray_Transpose(ap, &newaxes);
-        Py_DECREF(ap);
-        if (op == NULL) {
-            return NULL;
-        }
-    }
-    else {
-        op = ap;
-    }
-
-    /* Will get native-byte order contiguous copy. */
-    ap = (PyArrayObject *)PyArray_ContiguousFromAny((PyObject *)op,
-                                  PyArray_DESCR(op)->type_num, 1, 0);
-    Py_DECREF(op);
-    if (ap == NULL) {
-        return NULL;
-    }
-    arg_func = PyArray_DESCR(ap)->f->argmin;
-    if (arg_func == NULL) {
-        PyErr_SetString(PyExc_TypeError,
-                "data type not ordered");
-        goto fail;
-    }
-    elsize = PyArray_DESCR(ap)->elsize;
-    m = PyArray_DIMS(ap)[PyArray_NDIM(ap)-1];
-    if (m == 0) {
-        PyErr_SetString(PyExc_ValueError,
-                "attempt to get argmin of an empty sequence");
-        goto fail;
-    }
-
-    if (!out) {
-        rp = (PyArrayObject *)PyArray_New(Py_TYPE(ap), PyArray_NDIM(ap)-1,
-                                          PyArray_DIMS(ap), NPY_INTP,
-                                          NULL, NULL, 0, 0,
-                                          (PyObject *)ap);
-        if (rp == NULL) {
-            goto fail;
-        }
-    }
-    else {
-        if ((PyArray_NDIM(out) != PyArray_NDIM(ap) - 1) ||
-                !PyArray_CompareLists(PyArray_DIMS(out), PyArray_DIMS(ap),
-                                      PyArray_NDIM(out))) {
-            PyErr_SetString(PyExc_ValueError,
-                    "output array does not match result of np.argmin.");
-            goto fail;
-        }
-        rp = (PyArrayObject *)PyArray_FromArray(out,
-                              PyArray_DescrFromType(NPY_INTP),
-                              NPY_ARRAY_CARRAY | NPY_ARRAY_UPDATEIFCOPY);
-        if (rp == NULL) {
-            goto fail;
-        }
-    }
-
-    NPY_BEGIN_THREADS_DESCR(PyArray_DESCR(ap));
-    n = PyArray_SIZE(ap)/m;
-    rptr = (npy_intp *)PyArray_DATA(rp);
-    for (ip = PyArray_DATA(ap), i = 0; i < n; i++, ip += elsize*m) {
-        arg_func(ip, m, rptr, ap);
-        rptr += 1;
-    }
-    NPY_END_THREADS_DESCR(PyArray_DESCR(ap));
-
-    Py_DECREF(ap);
-    /* Trigger the UPDATEIFCOPY if necessary */
-    if (out != NULL && out != rp) {
-        Py_DECREF(rp);
-        rp = out;
-        Py_INCREF(rp);
-    }
-    return (PyObject *)rp;
-
- fail:
-    Py_DECREF(ap);
-    Py_XDECREF(rp);
-    return NULL;
 }
 
 /*NUMPY_API
