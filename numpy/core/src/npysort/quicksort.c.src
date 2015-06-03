@@ -33,7 +33,7 @@
 #include <stdlib.h>
 
 #define NOT_USED NPY_UNUSED(unused)
-#define PYA_QS_STACK 100
+#define PYA_QS_STACK 150
 #define SMALL_QUICKSORT 15
 #define SMALL_MERGESORT 20
 #define SMALL_STRING 16
@@ -63,66 +63,202 @@
 int
 quicksort_@suff@(@type@ *start, npy_intp num, void *NOT_USED)
 {
-    @type@ vp;
-    @type@ *pl = start;
-    @type@ *pr = start + num - 1;
+    @type@ *left = start;
+    @type@ *right = left + num - 1;
     @type@ *stack[PYA_QS_STACK];
     @type@ **sptr = stack;
-    @type@ *pm, *pi, *pj, *pk;
 
     for (;;) {
-        while ((pr - pl) > SMALL_QUICKSORT) {
-            /* quicksort partition */
-            pm = pl + ((pr - pl) >> 1);
-            if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
-            if (@TYPE@_LT(*pr, *pm)) @TYPE@_SWAP(*pr, *pm);
-            if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
-            vp = *pm;
-            pi = pl;
-            pj = pr - 1;
-            @TYPE@_SWAP(*pm, *pj);
-            for (;;) {
-                do ++pi; while (@TYPE@_LT(*pi, vp));
-                do --pj; while (@TYPE@_LT(vp, *pj));
-                if (pi >= pj) {
-                    break;
-                }
-                @TYPE@_SWAP(*pi,*pj);
-            }
-            pk = pr - 1;
-            @TYPE@_SWAP(*pi, *pk);
-            /* push largest partition on stack */
-            if (pi - pl < pr - pi) {
-                *sptr++ = pi + 1;
-                *sptr++ = pr;
-                pr = pi - 1;
+        @type@ *j;
+
+        while (right - left > SMALL_QUICKSORT) {
+            @type@ *less = left + 1;
+            @type@ *great = right - 1;
+            @type@ pivot1, pivot2;
+            npy_intp third = (right - left) / 3;
+            @type@ *med1 = left + third;
+            @type@ *med2 = right - third;
+            if (@TYPE@_LT(*med2, *med1)) {
+                @TYPE@_SWAP(*left, *med2);
+                @TYPE@_SWAP(*right, *med1);
             }
             else {
-                *sptr++ = pl;
-                *sptr++ = pi - 1;
-                pl = pi + 1;
+                @TYPE@_SWAP(*left, *med1);
+                @TYPE@_SWAP(*right, *med2);
+            }
+            pivot1 = *left;
+            pivot2 = *right;
+            j = less;
+            /*
+             * Partitioning:
+             *
+             *   +------------------------------------+
+             *   | < p1 | >= p1 && <= p2 |  ?  | > p2 |
+             *   +------------------------------------+
+             *  ^        ^                ^   ^        ^
+             *  |        |                |   |        |
+             * left     less              j great    right
+             *
+             * Invariants:
+             *
+             *              all in (left, less)   < pivot1
+             *    pivot1 <= all in [less, j)     <= pivot2
+             *              all in (great, right) > pivot2
+             */
+            while (j <= great) {
+                @type@ jval = *j;
+                if (@TYPE@_LT(jval, pivot1)) {
+                    *j++ = *less;
+                    *less++ = jval;
+                }
+                else if (@TYPE@_LT(pivot2, jval)) {
+                    while (@TYPE@_LT(pivot2, *great)) {
+                        --great;
+                    }
+                    if (j < great) {
+                        *j = *great;
+                        *great-- = jval;
+                    }
+                }
+                else {
+                    ++j;
+                }
+            }
+            /* make room for and copy pivots into position */
+            *left = *(--less);
+            *less = pivot1;
+            *right = *(++great);
+            *great = pivot2;
+            /*
+             *   +----------------------------------------+
+             *   | < p1 | p1 | >= p1 && <= p2 | p2 | > p2 |
+             *   +----------------------------------------+
+             *    ^       ^                     ^        ^
+             *    |       |                     |        |
+             *   left    less                 great    right
+             */
+
+            if (!@TYPE@_LT(pivot1, pivot2)) {
+                if (less - left < right - great) {
+                    *sptr++ = great + 1;
+                    *sptr++ = right;
+                    right = less - 1;
+                 }
+                else {
+                    *sptr++ = left;
+                    *sptr++ = less - 1;
+                    left = great + 1;
+                }
+            }
+            else {
+                if (less - left < right - great) {
+                    *sptr++ = great + 1;
+                    *sptr++ = right;
+                    right = great - 1;
+                    great = less;
+                }
+                else {
+                    *sptr++ = left;
+                    *sptr++ = less - 1;
+                    left = less + 1;
+                    less = great;
+                }
+                if (less - left < right - great) {
+                    *sptr++ = great + 1;
+                    *sptr++ = right;
+                    right = less - 1;
+                 }
+                else {
+                    *sptr++ = left;
+                    *sptr++ = less - 1;
+                    left = great + 1;
+                }
             }
         }
 
         /* insertion sort */
-        for (pi = pl + 1; pi <= pr; ++pi) {
-            vp = *pi;
-            pj = pi;
-            pk = pi - 1;
-            while (pj > pl && @TYPE@_LT(vp, *pk)) {
-                *pj-- = *pk--;
+        for (j = left + 1; j <= right; ++j) {
+            @type@ jval = *j;
+            @type@ *k = j;
+            @type@ *l = j - 1;
+            while (k > left && @TYPE@_LT(jval, *l)) {
+                *k-- = *l--;
             }
-            *pj = vp;
+            *k = jval;
         }
         if (sptr == stack) {
             break;
         }
-        pr = *(--sptr);
-        pl = *(--sptr);
+        right = *(--sptr);
+        left = *(--sptr);
     }
 
     return 0;
 }
+
+// int
+// quicksort_@suff@(@type@ *start, npy_intp num, void *NOT_USED)
+// {
+//     @type@ vp;
+//     @type@ *pl = start;
+//     @type@ *pr = start + num - 1;
+//     @type@ *stack[PYA_QS_STACK];
+//     @type@ **sptr = stack;
+//     @type@ *pm, *pi, *pj, *pk;
+
+//     for (;;) {
+//         while ((pr - pl) > SMALL_QUICKSORT) {
+//             /* quicksort partition */
+//             pm = pl + ((pr - pl) >> 1);
+//             if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
+//             if (@TYPE@_LT(*pr, *pm)) @TYPE@_SWAP(*pr, *pm);
+//             if (@TYPE@_LT(*pm, *pl)) @TYPE@_SWAP(*pm, *pl);
+//             vp = *pm;
+//             pi = pl;
+//             pj = pr - 1;
+//             @TYPE@_SWAP(*pm, *pj);
+//             for (;;) {
+//                 do ++pi; while (@TYPE@_LT(*pi, vp));
+//                 do --pj; while (@TYPE@_LT(vp, *pj));
+//                 if (pi >= pj) {
+//                     break;
+//                 }
+//                 @TYPE@_SWAP(*pi,*pj);
+//             }
+//             pk = pr - 1;
+//             @TYPE@_SWAP(*pi, *pk);
+//             /* push largest partition on stack */
+//             if (pi - pl < pr - pi) {
+//                 *sptr++ = pi + 1;
+//                 *sptr++ = pr;
+//                 pr = pi - 1;
+//             }
+//             else {
+//                 *sptr++ = pl;
+//                 *sptr++ = pi - 1;
+//                 pl = pi + 1;
+//             }
+//         }
+
+//         /* insertion sort */
+//         for (pi = pl + 1; pi <= pr; ++pi) {
+//             vp = *pi;
+//             pj = pi;
+//             pk = pi - 1;
+//             while (pj > pl && @TYPE@_LT(vp, *pk)) {
+//                 *pj-- = *pk--;
+//             }
+//             *pj = vp;
+//         }
+//         if (sptr == stack) {
+//             break;
+//         }
+//         pr = *(--sptr);
+//         pl = *(--sptr);
+//     }
+
+//     return 0;
+// }
 
 
 int
