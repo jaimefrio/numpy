@@ -1000,64 +1000,37 @@ fail:
     return NULL;
 }
 
-/* C-order inner loop for unravel_index */
+/* Inner loop for unravel_index */
 static int
-unravel_index_loop_corder(int unravel_ndim, npy_intp *unravel_dims,
-                        npy_intp unravel_size, npy_intp count,
-                        char *indices, npy_intp indices_stride,
-                        npy_intp *coords)
+unravel_index_loop(int unravel_ndim, npy_intp *unravel_dims,
+                   npy_intp unravel_size, npy_intp count,
+                   char *indices, npy_intp indices_stride,
+                   npy_intp *coords, int corder)
 {
-    int i;
-    char invalid;
-    npy_intp val;
+    int invalid = 0;
+    int start_idx = 0;
+    int delta_idx = 1;
 
     NPY_BEGIN_ALLOW_THREADS;
-    invalid = 0;
+    if (corder) {
+        start_idx = unravel_ndim - 1;
+        delta_idx = -1;
+    }
+
     while (count--) {
-        val = *(npy_intp *)indices;
+        int idx = start_idx;
+        int unravel_ndim_counter = unravel_ndim;
+        npy_intp val = *(npy_intp *)indices;
         if (val < 0 || val >= unravel_size) {
             invalid = 1;
             break;
         }
-        for (i = unravel_ndim-1; i >= 0; --i) {
-            coords[i] = val % unravel_dims[i];
-            val /= unravel_dims[i];
+        while (unravel_ndim_counter--) {
+            coords[idx] = val % unravel_dims[idx];
+            val /= unravel_dims[idx];
+            idx += delta_idx;
         }
         coords += unravel_ndim;
-        indices += indices_stride;
-    }
-    NPY_END_ALLOW_THREADS;
-    if (invalid) {
-        PyErr_SetString(PyExc_ValueError,
-              "invalid entry in index array");
-        return NPY_FAIL;
-    }
-    return NPY_SUCCEED;
-}
-
-/* Fortran-order inner loop for unravel_index */
-static int
-unravel_index_loop_forder(int unravel_ndim, npy_intp *unravel_dims,
-                        npy_intp unravel_size, npy_intp count,
-                        char *indices, npy_intp indices_stride,
-                        npy_intp *coords)
-{
-    int i;
-    char invalid;
-    npy_intp val;
-
-    NPY_BEGIN_ALLOW_THREADS;
-    invalid = 0;
-    while (count--) {
-        val = *(npy_intp *)indices;
-        if (val < 0 || val >= unravel_size) {
-            invalid = 1;
-            break;
-        }
-        for (i = 0; i < unravel_ndim; ++i) {
-            *coords++ = val % unravel_dims[i];
-            val /= unravel_dims[i];
-        }
         indices += indices_stride;
     }
     NPY_END_ALLOW_THREADS;
@@ -1162,64 +1135,36 @@ arr_unravel_index(PyObject *self, PyObject *args, PyObject *kwds)
         goto fail;
     }
 
-    if (order == NPY_CORDER) {
-        if (NpyIter_GetIterSize(iter) != 0) {
-            NpyIter_IterNextFunc *iternext;
-            char **dataptr;
-            npy_intp *strides;
-            npy_intp *countptr, count;
-            npy_intp *coordsptr = (npy_intp *)PyArray_DATA(ret_arr);
-
-            iternext = NpyIter_GetIterNext(iter, NULL);
-            if (iternext == NULL) {
-                goto fail;
-            }
-            dataptr = NpyIter_GetDataPtrArray(iter);
-            strides = NpyIter_GetInnerStrideArray(iter);
-            countptr = NpyIter_GetInnerLoopSizePtr(iter);
-
-            do {
-                count = *countptr;
-                if (unravel_index_loop_corder(dimensions.len, dimensions.ptr,
-                            unravel_size, count, *dataptr, *strides,
-                            coordsptr) != NPY_SUCCEED) {
-                    goto fail;
-                }
-                coordsptr += count*dimensions.len;
-            } while(iternext(iter));
-        }
-    }
-    else if (order == NPY_FORTRANORDER) {
-        if (NpyIter_GetIterSize(iter) != 0) {
-            NpyIter_IterNextFunc *iternext;
-            char **dataptr;
-            npy_intp *strides;
-            npy_intp *countptr, count;
-            npy_intp *coordsptr = (npy_intp *)PyArray_DATA(ret_arr);
-
-            iternext = NpyIter_GetIterNext(iter, NULL);
-            if (iternext == NULL) {
-                goto fail;
-            }
-            dataptr = NpyIter_GetDataPtrArray(iter);
-            strides = NpyIter_GetInnerStrideArray(iter);
-            countptr = NpyIter_GetInnerLoopSizePtr(iter);
-
-            do {
-                count = *countptr;
-                if (unravel_index_loop_forder(dimensions.len, dimensions.ptr,
-                            unravel_size, count, *dataptr, *strides,
-                            coordsptr) != NPY_SUCCEED) {
-                    goto fail;
-                }
-                coordsptr += count*dimensions.len;
-            } while(iternext(iter));
-        }
-    }
-    else {
+    if (order != NPY_CORDER && order != NPY_FORTRANORDER) {
         PyErr_SetString(PyExc_ValueError,
                         "only 'C' or 'F' order is permitted");
         goto fail;
+    }
+
+    if (NpyIter_GetIterSize(iter) != 0) {
+        NpyIter_IterNextFunc *iternext;
+        char **dataptr;
+        npy_intp *strides;
+        npy_intp *countptr, count;
+        npy_intp *coordsptr = (npy_intp *)PyArray_DATA(ret_arr);
+
+        iternext = NpyIter_GetIterNext(iter, NULL);
+        if (iternext == NULL) {
+            goto fail;
+        }
+        dataptr = NpyIter_GetDataPtrArray(iter);
+        strides = NpyIter_GetInnerStrideArray(iter);
+        countptr = NpyIter_GetInnerLoopSizePtr(iter);
+
+        do {
+            count = *countptr;
+            if (unravel_index_loop(dimensions.len, dimensions.ptr,
+                        unravel_size, count, *dataptr, *strides,
+                        coordsptr, order == NPY_CORDER) != NPY_SUCCEED) {
+                goto fail;
+            }
+            coordsptr += count*dimensions.len;
+        } while(iternext(iter));
     }
 
     /* Now make a tuple of views, one per index */
