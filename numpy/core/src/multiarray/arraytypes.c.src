@@ -3147,9 +3147,8 @@ static int
 
 /**end repeat**/
 
-static int
-OBJECT_argmax(PyObject **ip, npy_intp n, npy_intp *max_ind,
-              PyArrayObject *NPY_UNUSED(aip))
+static NPY_INLINE int
+OBJECT_argminmax(PyObject **ip, npy_intp n, npy_intp *max_ind, int opid)
 {
     npy_intp i;
 
@@ -3163,7 +3162,7 @@ OBJECT_argmax(PyObject **ip, npy_intp n, npy_intp *max_ind,
         for (i = i + 1; i < n; ++i) {
             PyObject *val = ip[i];
             if (val != NULL) {
-                int greater_than = PyObject_RichCompareBool(val, mp, Py_GT);
+                int greater_than = PyObject_RichCompareBool(val, mp, opid);
 
                 if (greater_than < 0) {
                     return 0;
@@ -3177,6 +3176,13 @@ OBJECT_argmax(PyObject **ip, npy_intp n, npy_intp *max_ind,
     }
 
     return 0;
+}
+
+static int
+OBJECT_argmax(PyObject **ip, npy_intp n, npy_intp *max_ind,
+              PyArrayObject *NPY_UNUSED(aip))
+{
+    return OBJECT_argminmax(ip, n, max_ind, Py_GT);
 }
 
 /**begin repeat
@@ -3215,32 +3221,7 @@ static int
 OBJECT_argmin(PyObject **ip, npy_intp n, npy_intp *min_ind,
               PyArrayObject *NPY_UNUSED(aip))
 {
-    npy_intp i;
-
-    *min_ind = 0;
-    /* Skip over all leading NULL entries */
-    for (i = 0; i < n && ip[i] == NULL; ++i);
-    if (i < n) {
-        /* Found first non-NULL entry */
-        PyObject *mp = ip[i];
-        *min_ind = i;
-        for (i = i + 1; i < n ; ++i) {
-            PyObject *val = ip[i];
-            if (val != NULL) {
-                int less_than = PyObject_RichCompareBool(val, mp, Py_LT);
-
-                if (less_than < 0) {
-                    return 0;
-                }
-                if (less_than) {
-                    mp = val;
-                    *min_ind = i;
-                }
-            }
-        }
-    }
-
-    return 0;
+    return OBJECT_argminmax(ip, n, min_ind, Py_LT);
 }
 
 /**begin repeat
