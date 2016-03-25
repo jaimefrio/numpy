@@ -1652,6 +1652,102 @@ NPY_NO_EXPORT PyObject *
 PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
                      NPY_SEARCHSIDE side, PyObject *perm)
 {
+    PyArrayObject *haystack = NULL;
+    PyArrayObject *needle;
+    PyArrayObject *sorter = NULL;
+    PyArrayObject *ret = NULL;
+    int flags = NPY_ARRAY_NOTSWAPPED | NPY_ARRAY_ALIGNED;
+
+    npy_intp haystack_len = PyArray_DIM(op1, PyArray_NDIM(op1) - 1);
+    npy_intp needle_len;
+    PyArray_Descr dtype;
+    int axn, axh;
+
+    PyArray_BinSearchFunc *binsearch = NULL;
+    PyArray_ArgBinSearchFunc *argbinsearch = NULL;
+
+    /* Find common type */
+    dtype = PyArray_DescrFromObject(op2, PyArray_DESCR(op1));
+    if (dtype == NULL) {
+        return NULL;
+    }
+
+    /* Look for binary search function */
+    if (perm) {
+        argbinsearch = get_argbinsearch_func(dtype, side);
+    }
+    else {
+        binsearch = get_binsearch_func(dtype, side);
+    }
+    if (binsearch == NULL && argbinsearch == NULL) {
+        PyErr_SetString(PyExc_TypeError, "compare not supported for type");
+        Py_DECREF(dtype);
+        return NULL;
+    }
+
+    /* Need needle as an aligned, not swapped array of right type */
+    Py_INCREF(dtype);
+    needle = (PyArrayObject *)PyArray_CheckFromAny(op2, dtype,
+                                                   1, 0, flags, NULL);
+    if (needle == NULL) {
+        Py_DECREF(dtype);
+        return NULL;
+    }
+    needle_len = PyArray_DIM(needle, PyArray_NDIM(needle) - 1);
+
+    /* Validate shapes of needle and haystack */
+    axn = PyArray_NDIM(needle) - 1;
+    axh = PyArray_NDIM(haystack) - 1;
+    while (axn > 0 && axh > 0) {
+        npy_intp dimn = PyArray_DIM(needle, axn);
+        npy_intp dimh = PyArray_DIM(op1, axh);
+        if (dimn != 1 && dimh != 1 && dimn != dimh) {
+            PyErr_SetString(PyExc_ValueError,
+                            "arrays could not be broadcast together");
+            Py_DECREF(dtype);
+            Py_DECREF(needle);
+            return NULL;
+        }
+    }
+
+    /*
+     * If needle_len is larger than haystack_len, make the haystack
+     * contiguous for improved cache utilization.
+     */
+    if (needle_len > haystack_len) {
+        flags |= NPY_ARRAY_C_CONTIGUOUS;
+    }
+    haystack = (PyArrayObject *)PyArray_CheckFromAny((PyObject *)op1, dtype,
+                                                     1, 0, flags, NULL);
+    if (haystack == NULL) {
+        Py_DECREF(needle);
+        return NULL;
+    }
+
+    if (perm) {
+        PyArrayObject *tmp;
+
+        tmp = (PyArrayObject *)PyArray_CheckFromAny(perm, NULL,
+                                                    1, 0, flags, NULL);
+        if (tmp == NULL) {
+            PyErr_SetString(PyExc_TypeError,
+                            "could not parse sorter argument");
+            Py_DECREF(needle);
+            Py_DECREF(haystack);
+            return NULL;
+        }
+    }
+
+
+
+
+
+}
+
+NPY_NO_EXPORT PyObject *
+PyArray_SearchSorted(PyArrayObject *op1, PyObject *op2,
+                     NPY_SEARCHSIDE side, PyObject *perm)
+{
     PyArrayObject *ap1 = NULL;
     PyArrayObject *ap2 = NULL;
     PyArrayObject *ap3 = NULL;
