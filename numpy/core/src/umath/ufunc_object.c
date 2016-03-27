@@ -3462,12 +3462,39 @@ PyUFunc_Reduceat(PyUFuncObject *ufunc, PyArrayObject *arr, PyArrayObject *ind,
     ind_size = PyArray_DIM(ind, 0);
     red_axis_size = PyArray_DIM(arr, axis);
 
-    /* Check for out-of-bounds values in indices array */
+    /* Check the indices array */
     for (i = 0; i < ind_size; ++i) {
-        if (reduceat_ind[i] < 0 || reduceat_ind[i] >= red_axis_size) {
+        npy_intp start = reduceat_ind[i];
+        npy_intp end = i == ind_size - 1 ? red_axis_size : reduceat_ind[i+1];
+
+        if (end <= start) {
+            if (ufunc->identity < 0) {
+                /* UFunc has no identity */
+                if (DEPRECATE_FUTUREWARNING(
+                        "in the future, empty slices in reduceat for "
+                        "ufunc's with no reduction will raise an error") < 0) {
+                    return NULL;
+                }
+            } else {
+                /* UFunc has an identity */
+                if (DEPRECATE_FUTUREWARNING(
+                        "In the future, empty slices in reduceat will "
+                        "return the ufunc identity") < 0) {
+                    return NULL;
+                }
+            }
+        }
+
+        if (start < 0 || start >= red_axis_size) {
+            if (start >= -red_axis_size &&
+                DEPRECATE_FUTUREWARNING("In the future, negative indices "
+                                        "in reduceat will not raise an "
+                                        "error") < 0) {
+                return NULL;
+            }
             PyErr_Format(PyExc_IndexError,
-                "index %d out-of-bounds in %s.%s [0, %d)",
-                (int)reduceat_ind[i], ufunc_name, opname, (int)red_axis_size);
+                "index %zd out-of-bounds in %s.%s [0, %d)",
+                start, ufunc_name, opname, (int)red_axis_size);
             return NULL;
         }
     }
